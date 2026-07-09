@@ -1,0 +1,75 @@
+export interface ChatMessage {
+	/** MAM archive id — unique and chronologically sortable */
+	id: string;
+	roomName: string;
+	/** MUC nickname of the sender (resource part of the room JID) */
+	nickname: string;
+	body: string;
+	/** ISO timestamp from the archive's <delay> element */
+	timestamp: string;
+	/** display name carried by the Ethora <data> element, if present */
+	senderName?: string;
+	/** avatar URL carried by the Ethora <data> element, if present */
+	avatar?: string;
+}
+
+export interface RoomMessages {
+	/** oldest → newest */
+	messages: ChatMessage[];
+	/** archive id of the oldest loaded message — pagination cursor */
+	firstArchiveId: string | null;
+	/** true when the beginning of the archive has been reached */
+	complete: boolean;
+	loading: boolean;
+}
+
+export const messagesState = $state({
+	rooms: {} as Record<string, RoomMessages>
+});
+
+export function ensureRoom(roomName: string): RoomMessages {
+	if (!messagesState.rooms[roomName]) {
+		messagesState.rooms[roomName] = {
+			messages: [],
+			firstArchiveId: null,
+			complete: false,
+			loading: false
+		};
+	}
+	return messagesState.rooms[roomName];
+}
+
+/** Add an older page of messages to the beginning of the room history. */
+export function prependMessages(
+	roomName: string,
+	incoming: ChatMessage[],
+	firstArchiveId: string | null,
+	complete: boolean
+): void {
+	const room = ensureRoom(roomName);
+	const known = new Set(room.messages.map((m) => m.id));
+	room.messages = [...incoming.filter((m) => !known.has(m.id)), ...room.messages];
+	if (firstArchiveId) {
+		room.firstArchiveId = firstArchiveId;
+	}
+	room.complete = complete;
+}
+
+/** Add a freshly received live message to the end of the room history. */
+export function appendMessage(roomName: string, message: ChatMessage): void {
+	const room = ensureRoom(roomName);
+	if (room.messages.some((m) => m.id === message.id)) return;
+	room.messages = [...room.messages, message];
+}
+
+export function lastMessage(roomName: string): ChatMessage | undefined {
+	return messagesState.rooms[roomName]?.messages.at(-1);
+}
+
+export function forgetRoom(roomName: string): void {
+	delete messagesState.rooms[roomName];
+}
+
+export function clearMessages(): void {
+	messagesState.rooms = {};
+}
