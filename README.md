@@ -17,6 +17,10 @@ chat management, ejabberd (XMPP over WebSocket) for real-time messaging.
   drop the leaver from the member list without waiting for the backend.
 - **Messaging** — live groupchat over XMPP with MAM (XEP-0313) history
   paging; links are clickable, room links open in-app.
+- **Delivery & read receipts** — own messages go `…` (sending) → `✓`
+  (reached the server) → gray `✓✓` (delivered to at least one member) →
+  blue `✓✓` (read by at least one member); the tooltip shows both counts.
+  See [Delivery & read receipts](#delivery--read-receipts).
 - **Media** — file upload (`/v1/files/`) sent in the Ethora media-stanza
   format; images open in a PhotoSwipe gallery, video/audio play inline.
 - **Mentions** — `@`-autocomplete in the composer, sent as XEP-0372
@@ -96,13 +100,109 @@ for interop with official Ethora clients:
   elements; they survive both live reflection and the MAM archive.
 - **Delivery receipts** = bodyless groupchat message with
   `<received xmlns="urn:xmpp:receipts" id="<archive-id>"/>` and a `<store>`
-  hint. The room reflects it to everyone and MAM keeps it, so ✓✓ state
-  survives reloads. Receipts count as archive entries when paging.
+  hint — see [Delivery & read receipts](#delivery--read-receipts).
 - **Read markers** = bodyless groupchat message with
   `<displayed xmlns="urn:xmpp:chat-markers:0" id="<archive-id>"/>` and a
-  `<store>` hint — XEP-0333 watermark semantics: one marker on the newest
-  seen message covers everything before it, so opening a chat costs a
-  single stanza. Blue ✓✓ = read by at least one member.
+  `<store>` hint — see [Delivery & read receipts](#delivery--read-receipts).
 - **Voluntary leave** is signalled with `<status>left-room</status>`
   inside the unavailable presence — on the wire a plain leave is otherwise
   indistinguishable from a connection drop.
+
+## Delivery & read receipts
+
+Message status shown under every own message: `…` sending → `✓` reached
+the server → gray `✓✓` delivered to at least one member → blue `✓✓` read
+by at least one member. Hovering the ticks shows both counts, e.g.
+`Read by 2 · Delivered to 5` (reading implies receiving, so
+delivered ≥ read). Everything below was verified live against the QA
+ejabberd before being relied upon.
+
+### `✓` — the server echo (no extra stanzas)
+
+A MUC room reflects every groupchat message back to its sender, and this
+ejabberd **preserves the stanza `id`** in that reflection. The client uses
+that instead of a separate ack:
+
+```xml
+<!-- out -->
+<message id="local-3f2a…" type="groupchat" to="room@conference…">
+  <body>hello</body>
+</message>
+
+<!-- in: the echo confirms delivery to the server -->
+<message id="local-3f2a…" type="groupchat" from="room@conference…/me">
+  <body>hello</body>
+  <stanza-id xmlns="urn:xmpp:sid:0" id="1783689048683297"/>
+</message>
+```
+
+Client handling: `sendRoomMessage()` appends the message to state
+immediately with `pending: true` and a `local-…` placeholder id. When the
+echo arrives, the live handler matches it by the preserved stanza `id`
+(`confirmMessage()`), swaps the pending copy for the confirmed one — its
+real id is the `<stanza-id>` archive id — and the `…` becomes `✓`. A failed
+send removes the optimistic copy.
+
+### Gray `✓✓` — delivery receipts (XEP-0184 in a MUC)
+
+When a client receives a live message from someone else, it answers into
+the room with a bodyless stanza referencing the message's archive id:
+
+```xml
+<message type="groupchat" to="room@conference…">
+  <received xmlns="urn:xmpp:receipts" id="1783689048683297"/>
+  <store xmlns="urn:xmpp:hints"/>
+</message>
+```
+
+The room reflects it to every occupant (the sender's `✓` turns into `✓✓`
+live) and the `<store>` hint makes MAM archive it, so the state survives
+page reloads.
+
+Client handling:
+
+- **Sending**: on every live foreign message; plus a catch-up pass in
+  `loadLastMessages()` for messages that arrived while the client was
+  offline. No duplicates: a receipt is always archived *after* its message,
+  so if ours exists it is inside the same MAM window we just loaded.
+- **Receiving**: live receipts and archived ones (they come out of MAM as
+  entries of their own) land in the message's `receivedBy` list. A receipt
+  can reference a message from an older, not-yet-loaded page — those are
+  parked in `pendingReceipts` and applied when paging reaches the message.
+
+### Blue `✓✓` — read markers (XEP-0333 watermarks)
+
+“Read” is signalled with a `displayed` marker. Watermark semantics: one
+marker on the newest seen message means *everything up to and including it
+has been read*, so opening a chat with any backlog costs a single stanza:
+
+```xml
+<message type="groupchat" to="room@conference…">
+  <displayed xmlns="urn:xmpp:chat-markers:0" id="1783689048683297"/>
+  <store xmlns="urn:xmpp:hints"/>
+</message>
+```
+
+Client handling:
+
+- **Sending** (`markRoomDisplayed()`): when a chat is opened, when a live
+  message arrives in the currently open chat with the tab visible, and on
+  `visibilitychange` when the user returns to the tab. It targets the
+  newest non-own message and no-ops if the own watermark already covers it,
+  if the tab is hidden, or while offline.
+- **Receiving**: markers (live and from MAM) update a per-room map
+  `displayedUpTo[nickname] = newest marked archive id`. A message counts as
+  read by everyone whose watermark is `>=` its archive id — archive ids are
+  chronologically sortable, so this is a plain comparison, with no
+  per-message bookkeeping.
+- **Rendering** (`deliveryStats()`): readers = watermarks covering the
+  message; delivered = readers ∪ explicit receipts. `read > 0` paints the
+  ticks blue.
+
+### Caveats
+
+- Receipts and markers count as MAM entries, which dilutes paging — that is
+  why the sidebar-preview loader fetches 10 entries per room instead of 1.
+- Only this client emits receipts/markers. Official Ethora clients don't,
+  so their users never bump the counters — which is also why the group-chat
+  rule is “at least one” rather than “all members”.
