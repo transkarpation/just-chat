@@ -9,10 +9,14 @@ import { getMyChats } from '$lib/api/chats';
 import { chatsState, setChats } from '$lib/state/chats.svelte';
 import { xmppState, type XmppStatus } from '$lib/state/xmpp.svelte';
 import {
+	messagesState,
 	ensureRoom,
 	prependMessages,
 	appendMessage,
 	confirmMessage,
+	applyReceipt,
+	applyDisplayedMarker,
+	compareArchiveIds,
 	removeMessage,
 	forgetRoom,
 	type ChatMessage,
@@ -144,6 +148,20 @@ export async function connectAndJoinRooms(
 			removeMessage(room, String(deleted.attrs.id));
 			return;
 		}
+		// a delivery receipt (bodyless): someone's client confirmed receiving
+		// the message with that archive id — reflected to everyone, us included
+		const receipt = stanza.getChild('received', 'urn:xmpp:receipts');
+		if (receipt?.attrs.id) {
+			applyReceipt(room, String(receipt.attrs.id), nick);
+			return;
+		}
+		// a read marker (bodyless): the sender has seen everything up to and
+		// including that message
+		const displayed = stanza.getChild('displayed', 'urn:xmpp:chat-markers:0');
+		if (displayed?.attrs.id) {
+			applyDisplayedMarker(room, nick, String(displayed.attrs.id));
+			return;
+		}
 		const body = stanza.getChildText('body');
 		if (!body) return;
 		const mentions = mentionsMeta(stanza);
@@ -165,20 +183,27 @@ export async function connectAndJoinRooms(
 			return; // own echo — replaced the pending copy, no sounds for own sends
 		}
 		appendMessage(room, message);
+		const openRoom =
+			typeof location !== 'undefined'
+				? new URLSearchParams(location.search).get('roomId')
+				: null;
+		if (nick !== currentUser && stanza.getChild('stanza-id', 'urn:xmpp:sid:0')) {
+			// confirm delivery back to the sender (their ✓ becomes ✓✓); only
+			// archived messages have an id the receipt can reference
+			void sendDeliveryReceipt(room, message.id);
+			// the user is looking at this chat right now — it's read, too
+			if (openRoom === room && !document.hidden) {
+				markRoomDisplayed(room);
+			}
+		}
 		// an audible ping for incoming messages (never for own sends): a loud
 		// chime when this user is mentioned; a quiet tick for other messages,
 		// but only when they can be missed — hidden tab or a different chat
 		if (nick !== currentUser) {
 			if (mentions?.some((m) => m.xmppUsername === currentUser)) {
 				void playMentionSound();
-			} else {
-				const openRoom =
-					typeof location !== 'undefined'
-						? new URLSearchParams(location.search).get('roomId')
-						: null;
-				if (document.hidden || openRoom !== room) {
-					void playMessageSound();
-				}
+			} else if (document.hidden || openRoom !== room) {
+				void playMessageSound();
 			}
 		}
 		notifyIfBackgrounded(room, nick, body, mentions);
@@ -266,6 +291,10 @@ function notifyIfBackgrounded(
 interface HistoryPage {
 	/** oldest → newest, as the archive returns them */
 	messages: ChatMessage[];
+	/** delivery receipts found in this page (they are archive entries too) */
+	receipts: { messageId: string; nickname: string }[];
+	/** read markers found in this page */
+	markers: { messageId: string; nickname: string }[];
 	/** archive id of the first (oldest) message in this page */
 	first: string | null;
 	/** true when the page reaches the beginning of the archive */
@@ -287,6 +316,8 @@ async function fetchRoomHistory(
 	const roomJid = `${roomName}@${PUBLIC_XMPP_CONFERENCE}`;
 	const queryid = `mam-${++mamQueryCounter}`;
 	const collected: ChatMessage[] = [];
+	const receipts: HistoryPage['receipts'] = [];
+	const markers: HistoryPage['markers'] = [];
 
 	// archived messages arrive as separate stanzas correlated by queryid,
 	// while the awaited IQ result only carries the paging metadata
@@ -296,8 +327,27 @@ async function fetchRoomHistory(
 		if (!result || result.attrs.queryid !== queryid) return;
 		const forwarded = result.getChild('forwarded', 'urn:xmpp:forward:0');
 		const message = forwarded?.getChild('message');
-		const body = message?.getChildText('body');
-		if (!message || !body) return; // skip bodyless archive entries
+		if (!message) return;
+		// archived delivery receipts — bodyless entries referencing a message
+		const receipt = message.getChild('received', 'urn:xmpp:receipts');
+		if (receipt?.attrs.id) {
+			receipts.push({
+				messageId: String(receipt.attrs.id),
+				nickname: String(message.attrs.from ?? '').split('/')[1] ?? ''
+			});
+			return;
+		}
+		// archived read markers
+		const marker = message.getChild('displayed', 'urn:xmpp:chat-markers:0');
+		if (marker?.attrs.id) {
+			markers.push({
+				messageId: String(marker.attrs.id),
+				nickname: String(message.attrs.from ?? '').split('/')[1] ?? ''
+			});
+			return;
+		}
+		const body = message.getChildText('body');
+		if (!body) return; // skip other bodyless archive entries
 		// deleted messages stay in the archive as tombstones: the body
 		// becomes "deleted" and a <deleted> element is attached
 		if (message.getChild('deleted')) return;
@@ -335,6 +385,8 @@ async function fetchRoomHistory(
 		const set = fin?.getChild('set', 'http://jabber.org/protocol/rsm');
 		return {
 			messages: collected,
+			receipts,
+			markers,
 			first: set?.getChildText('first') ?? null,
 			complete: fin?.attrs.complete === 'true'
 		};
@@ -343,13 +395,31 @@ async function fetchRoomHistory(
 	}
 }
 
-/** Fetch the newest message of each room that has no history in state yet. */
+/** Fetch the newest messages of each room that has no history in state yet. */
 export async function loadLastMessages(roomNames: string[]): Promise<void> {
 	await Promise.all(
 		roomNames.map(async (roomName) => {
 			if (ensureRoom(roomName).messages.length > 0) return;
-			const page = await fetchRoomHistory(roomName, { max: 1 });
+			// receipts count as archive entries, so a max:1 page could contain
+			// only a receipt and no message — fetch a handful instead
+			const page = await fetchRoomHistory(roomName, { max: 10 });
 			prependMessages(roomName, page.messages, page.first, page.complete);
+			for (const receipt of page.receipts) {
+				applyReceipt(roomName, receipt.messageId, receipt.nickname);
+			}
+			for (const marker of page.markers) {
+				applyDisplayedMarker(roomName, marker.nickname, marker.messageId);
+			}
+			// catch up on deliveries that happened while we were offline: any
+			// loaded message from someone else without our receipt gets one now.
+			// A receipt is always archived after its message, so if our receipt
+			// exists, it is inside this same (newest) page — no false resends.
+			for (const message of ensureRoom(roomName).messages) {
+				if (message.nickname === currentUser) continue;
+				if (message.receivedBy?.includes(currentUser)) continue;
+				applyReceipt(roomName, message.id, currentUser); // don't resend on later loads
+				void sendDeliveryReceipt(roomName, message.id);
+			}
 		})
 	);
 }
@@ -365,6 +435,15 @@ export async function loadOlderMessages(roomName: string, count = 20): Promise<v
 			beforeId: room.firstArchiveId ?? undefined
 		});
 		prependMessages(roomName, page.messages, page.first, page.complete);
+		// receipts in this window may reference messages of even older pages —
+		// applyReceipt parks those until the page with the message arrives
+		// (read watermarks don't care: they apply to any id ordering-wise)
+		for (const receipt of page.receipts) {
+			applyReceipt(roomName, receipt.messageId, receipt.nickname);
+		}
+		for (const marker of page.markers) {
+			applyDisplayedMarker(roomName, marker.nickname, marker.messageId);
+		}
 	} finally {
 		room.loading = false;
 	}
@@ -472,6 +551,64 @@ async function acceptRoomInvite(roomName: string): Promise<void> {
 	} catch (err) {
 		console.error('accepting room invite failed:', err);
 	}
+}
+
+/**
+ * Confirm to the room that this client received the message with the given
+ * archive id (delivery receipt, XEP-0184 element sent as a groupchat stanza).
+ * The room reflects it to every occupant — the sender's ✓ turns into ✓✓ —
+ * and the <store> hint archives it so the state survives reloads.
+ * Best-effort: a lost receipt only understates delivery.
+ */
+async function sendDeliveryReceipt(roomName: string, archiveId: string): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') return;
+	try {
+		await xmpp.send(
+			xml(
+				'message',
+				{ type: 'groupchat', to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}` },
+				xml('received', { xmlns: 'urn:xmpp:receipts', id: archiveId }),
+				xml('store', { xmlns: 'urn:xmpp:hints' })
+			)
+		);
+	} catch (err) {
+		console.error('sending delivery receipt failed:', err);
+	}
+}
+
+/**
+ * Tell the room this user has read everything up to the newest loaded
+ * message from someone else (XEP-0333 displayed marker as a groupchat
+ * stanza, archived via <store>). One watermark covers the whole backlog, so
+ * opening a chat costs a single stanza. No-ops when there is nothing newer
+ * than the already-sent watermark, when the tab is hidden, or when offline.
+ * Call it whenever the user is actually looking at the room's messages.
+ */
+export function markRoomDisplayed(roomName: string): void {
+	if (typeof document === 'undefined' || document.hidden) return;
+	if (!xmpp || xmppState.status !== 'online') return;
+	const room = messagesState.rooms[roomName];
+	if (!room) return;
+	// own messages don't need a read mark — take the newest foreign one
+	const newest = room.messages.findLast((m) => !m.pending && m.nickname !== currentUser);
+	if (!newest) return;
+	const own = room.displayedUpTo[currentUser];
+	if (own && compareArchiveIds(newest.id, own) <= 0) return; // already marked
+	applyDisplayedMarker(roomName, currentUser, newest.id);
+	void (async () => {
+		try {
+			await xmpp!.send(
+				xml(
+					'message',
+					{ type: 'groupchat', to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}` },
+					xml('displayed', { xmlns: 'urn:xmpp:chat-markers:0', id: newest.id }),
+					xml('store', { xmlns: 'urn:xmpp:hints' })
+				)
+			);
+		} catch (err) {
+			console.error('sending read marker failed:', err);
+		}
+	})();
 }
 
 /**

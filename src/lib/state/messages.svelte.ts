@@ -32,6 +32,9 @@ export interface ChatMessage {
 	/** own message shown optimistically, before the server echoed it back;
 	 * `id` is a local placeholder, not an archive id */
 	pending?: boolean;
+	/** nicknames whose clients confirmed receiving this message (delivery
+	 * receipts); may include the own nickname for incoming messages */
+	receivedBy?: string[];
 }
 
 export interface RoomMessages {
@@ -42,6 +45,14 @@ export interface RoomMessages {
 	/** true when the beginning of the archive has been reached */
 	complete: boolean;
 	loading: boolean;
+	/** delivery receipts whose message is not loaded yet (receipts are always
+	 * archived after their message, so newer MAM pages can reference messages
+	 * from older, not-yet-loaded pages) — applied when the message arrives */
+	pendingReceipts: Record<string, string[]>;
+	/** read watermark per nickname: the archive id of the newest message that
+	 * user has displayed — every message with id <= watermark counts as read
+	 * by them (XEP-0333 semantics: a marker covers everything before it) */
+	displayedUpTo: Record<string, string>;
 }
 
 export const messagesState = $state({
@@ -54,7 +65,9 @@ export function ensureRoom(roomName: string): RoomMessages {
 			messages: [],
 			firstArchiveId: null,
 			complete: false,
-			loading: false
+			loading: false,
+			pendingReceipts: {},
+			displayedUpTo: {}
 		};
 	}
 	return messagesState.rooms[roomName];
@@ -69,11 +82,64 @@ export function prependMessages(
 ): void {
 	const room = ensureRoom(roomName);
 	const known = new Set(room.messages.map((m) => m.id));
-	room.messages = [...incoming.filter((m) => !known.has(m.id)), ...room.messages];
+	const fresh = incoming.filter((m) => !known.has(m.id));
+	// receipts from newer pages may have been waiting for these messages
+	for (const message of fresh) {
+		const waiting = room.pendingReceipts[message.id];
+		if (waiting) {
+			message.receivedBy = [...new Set([...(message.receivedBy ?? []), ...waiting])];
+			delete room.pendingReceipts[message.id];
+		}
+	}
+	room.messages = [...fresh, ...room.messages];
 	if (firstArchiveId) {
 		room.firstArchiveId = firstArchiveId;
 	}
 	room.complete = complete;
+}
+
+/**
+ * Compare two MAM archive ids chronologically. They are decimal microsecond
+ * timestamps, so shorter means older; equal lengths compare lexicographically.
+ */
+export function compareArchiveIds(a: string, b: string): number {
+	return a.length !== b.length ? a.length - b.length : a.localeCompare(b);
+}
+
+/**
+ * Record a read (displayed) marker: `nickname` has seen everything up to and
+ * including the message with `markerId`. Only the newest watermark is kept.
+ */
+export function applyDisplayedMarker(
+	roomName: string,
+	nickname: string,
+	markerId: string
+): void {
+	const room = ensureRoom(roomName);
+	const current = room.displayedUpTo[nickname];
+	if (!current || compareArchiveIds(markerId, current) > 0) {
+		room.displayedUpTo[nickname] = markerId;
+	}
+}
+
+/**
+ * Record a delivery receipt: `nickname`'s client confirmed receiving the
+ * message with the given archive id. If that message is not loaded (yet),
+ * the receipt is parked and applied when an older page brings the message in.
+ */
+export function applyReceipt(roomName: string, messageId: string, nickname: string): void {
+	const room = ensureRoom(roomName);
+	const message = room.messages.find((m) => m.id === messageId);
+	if (message) {
+		if (!message.receivedBy?.includes(nickname)) {
+			message.receivedBy = [...(message.receivedBy ?? []), nickname];
+		}
+		return;
+	}
+	const waiting = room.pendingReceipts[messageId] ?? [];
+	if (!waiting.includes(nickname)) {
+		room.pendingReceipts[messageId] = [...waiting, nickname];
+	}
 }
 
 /** Add a freshly received live message to the end of the room history. */

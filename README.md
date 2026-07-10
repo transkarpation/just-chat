@@ -94,6 +94,15 @@ for interop with official Ethora clients:
   the room reflects it to everyone and MAM keeps a tombstone.
 - **Mentions** = XEP-0372 `<reference type="mention" begin end uri="xmpp:…"/>`
   elements; they survive both live reflection and the MAM archive.
+- **Delivery receipts** = bodyless groupchat message with
+  `<received xmlns="urn:xmpp:receipts" id="<archive-id>"/>` and a `<store>`
+  hint. The room reflects it to everyone and MAM keeps it, so ✓✓ state
+  survives reloads. Receipts count as archive entries when paging.
+- **Read markers** = bodyless groupchat message with
+  `<displayed xmlns="urn:xmpp:chat-markers:0" id="<archive-id>"/>` and a
+  `<store>` hint — XEP-0333 watermark semantics: one marker on the newest
+  seen message covers everything before it, so opening a chat costs a
+  single stanza. Blue ✓✓ = read by at least one member.
 - **Voluntary leave** is signalled with `<status>left-room</status>`
   inside the unavailable presence — on the wire a plain leave is otherwise
   indistinguishable from a connection drop.

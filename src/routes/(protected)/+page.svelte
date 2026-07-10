@@ -18,14 +18,17 @@
 		lastMessage,
 		clearMessages,
 		forgetRoom,
+		compareArchiveIds,
 		type ChatMessage,
-		type MessageMention
+		type MessageMention,
+		type RoomMessages
 	} from '$lib/state/messages.svelte';
 	import {
 		connectAndJoinRooms,
 		disconnectXmpp,
 		loadLastMessages,
 		loadOlderMessages,
+		markRoomDisplayed,
 		sendRoomMessage,
 		sendMediaMessage,
 		deleteRoomMessage,
@@ -103,6 +106,18 @@
 				console.error('XMPP setup failed:', err);
 			}
 		}
+	});
+
+	// returning to the tab means the open conversation is being read again —
+	// push the read watermark for messages that arrived while it was hidden
+	onMount(() => {
+		const onVisible = () => {
+			if (!document.hidden && selectedRoom) {
+				markRoomDisplayed(selectedRoom);
+			}
+		};
+		document.addEventListener('visibilitychange', onVisible);
+		return () => document.removeEventListener('visibilitychange', onVisible);
 	});
 
 	// jump to the newest message when one is appended to the open chat
@@ -218,7 +233,11 @@
 		prevNewestId = null;
 		// history already in state (chat was opened before) — jump right away
 		await scrollToBottom();
-		composerEl?.focus();
+		// autofocus only on the desktop layout — on mobile it would pop the
+		// on-screen keyboard over the freshly opened chat
+		if (window.matchMedia('(min-width: 768px)').matches) {
+			composerEl?.focus();
+		}
 		try {
 			await loadOlderMessages(roomName, 20);
 		} catch (err) {
@@ -229,6 +248,8 @@
 		// unless the user has already switched to another chat
 		if (selectedRoom === roomName) {
 			await scrollToBottom();
+			// the user is looking at the conversation now — mark it read
+			markRoomDisplayed(roomName);
 		}
 	}
 
@@ -352,6 +373,26 @@
 			parts.push(...linkify(message.body.slice(cursor)));
 		}
 		return parts;
+	}
+
+	/** how many OTHER members read / received an own message: readers come
+	 * from per-user watermarks (marker id >= message id), delivered is the
+	 * union of explicit receipts and readers (reading implies receiving) */
+	function deliveryStats(
+		room: RoomMessages,
+		message: ChatMessage
+	): { read: number; delivered: number } {
+		const readers = new Set<string>();
+		for (const [nickname, upTo] of Object.entries(room.displayedUpTo)) {
+			if (nickname !== myNickname && compareArchiveIds(message.id, upTo) <= 0) {
+				readers.add(nickname);
+			}
+		}
+		const delivered = new Set(readers);
+		for (const nickname of message.receivedBy ?? []) {
+			if (nickname !== myNickname) delivered.add(nickname);
+		}
+		return { read: readers.size, delivered: delivered.size };
 	}
 
 	function formatTime(timestamp: string): string {
@@ -1070,14 +1111,26 @@
 										{/if}
 									</div>
 									{#if mine}
-										<!-- delivery status: the tick appears when the server echoed
-										     the message back (= it reached the server's archive) -->
+										<!-- delivery status: ✓ when the server echoed the message
+										     back, gray ✓✓ when at least one other member's client
+										     confirmed delivery, blue ✓✓ when at least one has read
+										     it; hover shows both counts -->
+										{@const stats = deliveryStats(selectedMessages, message)}
+										{@const status = message.pending
+											? 'Sending…'
+											: stats.read > 0
+												? `Read by ${stats.read} · Delivered to ${stats.delivered}`
+												: stats.delivered > 0
+													? `Delivered to ${stats.delivered}`
+													: 'Delivered to server'}
 										<span
-											class="mt-0.5 text-sm leading-none text-gray-400 dark:text-gray-500"
-											title={message.pending ? 'Sending…' : 'Delivered to server'}
-											aria-label={message.pending ? 'Sending' : 'Delivered to server'}
+											class="mt-0.5 text-sm leading-none {stats.read > 0
+												? 'text-sky-500 dark:text-sky-400'
+												: 'text-gray-400 dark:text-gray-500'}"
+											title={status}
+											aria-label={status}
 										>
-											{message.pending ? '…' : '✓'}
+											{message.pending ? '…' : stats.delivered > 0 ? '✓✓' : '✓'}
 										</span>
 									{/if}
 									</div>
