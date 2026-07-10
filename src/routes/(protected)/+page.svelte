@@ -47,6 +47,17 @@
 	let messagesEl = $state<HTMLElement | null>(null);
 	let composerEl = $state<HTMLInputElement | null>(null);
 	let showOnlineList = $state(false);
+	let showMembersList = $state(false);
+	let membersSearch = $state('');
+
+	const filteredMembers = $derived.by(() => {
+		if (!selectedChat) return [];
+		const query = membersSearch.trim().toLowerCase();
+		if (!query) return selectedChat.members;
+		return selectedChat.members.filter((m) =>
+			`${m.firstName} ${m.lastName}`.toLowerCase().includes(query)
+		);
+	});
 	let draft = $state('');
 	let sending = $state(false);
 	let sendError = $state('');
@@ -227,6 +238,8 @@
 	async function activateRoom(roomName: string) {
 		selectedRoom = roomName;
 		showOnlineList = false;
+		showMembersList = false;
+		membersSearch = '';
 		sendError = '';
 		joinError = '';
 		deleteError = '';
@@ -689,7 +702,9 @@
 	<title>User page</title>
 </svelte:head>
 
-<div class="flex h-screen flex-col bg-gray-50 dark:bg-gray-950">
+<div class="flex h-screen justify-center bg-gray-100 dark:bg-black">
+	<!-- cap the app width on large screens; children keep their layout -->
+	<div class="flex h-full w-full max-w-6xl flex-col border-gray-200 bg-gray-50 xl:border-x dark:border-gray-800 dark:bg-gray-950">
 	<header class="shrink-0 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
 		<div class="flex items-center justify-between px-4 py-3 sm:px-6">
 			<h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">User page</h1>
@@ -869,12 +884,26 @@
 					<div class="relative min-w-0 flex-1">
 						<h3 class="truncate font-semibold text-gray-900 dark:text-gray-100">{chatTitle(selectedChat)}</h3>
 						<p class="text-xs text-gray-500 dark:text-gray-400">
-							{selectedChat.members.length}
-							{selectedChat.members.length === 1 ? 'member' : 'members'}
+							<button
+								type="button"
+								onclick={() => {
+									showMembersList = !showMembersList;
+									showOnlineList = false;
+									membersSearch = '';
+								}}
+								class="font-medium underline-offset-2 hover:underline"
+								aria-expanded={showMembersList}
+							>
+								{selectedChat.members.length}
+								{selectedChat.members.length === 1 ? 'member' : 'members'}
+							</button>
 							<span class="mx-1">·</span>
 							<button
 								type="button"
-								onclick={() => (showOnlineList = !showOnlineList)}
+								onclick={() => {
+									showOnlineList = !showOnlineList;
+									showMembersList = false;
+								}}
 								class="font-medium text-green-600 underline-offset-2 hover:underline dark:text-green-400"
 								aria-expanded={showOnlineList}
 							>
@@ -882,25 +911,96 @@
 							</button>
 						</p>
 
-						{#if showOnlineList}
+						{#if showOnlineList || showMembersList}
 							<!-- click-away backdrop -->
 							<button
 								type="button"
 								class="fixed inset-0 z-10 cursor-default"
-								aria-label="Close online users list"
-								onclick={() => (showOnlineList = false)}
+								aria-label="Close the list"
+								onclick={() => {
+									showOnlineList = false;
+									showMembersList = false;
+								}}
 							></button>
+						{/if}
+						{#if showOnlineList}
 							<div
 								class="absolute top-full left-0 z-20 mt-1 max-h-64 w-64 overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700"
 							>
 								{#each xmppState.occupants[selectedChat.name] ?? [] as nickname (nickname)}
-									<div class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200">
+									{@const occupant = selectedChat.members.find((m) => m.xmppUsername === nickname)}
+									{@const name = nickToName(selectedChat, nickname)}
+									<div class="flex items-center gap-2.5 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200">
+										{#if occupant?.profileImage}
+											<img
+												src={occupant.profileImage}
+												alt=""
+												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+											/>
+										{:else}
+											<span
+												class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+											>
+												{name.charAt(0).toUpperCase()}
+											</span>
+										{/if}
+										<span class="min-w-0 flex-1 truncate">{name}</span>
 										<span class="h-2 w-2 shrink-0 rounded-full bg-green-500"></span>
-										<span class="truncate">{nickToName(selectedChat, nickname)}</span>
 									</div>
 								{:else}
 									<p class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Nobody is online.</p>
 								{/each}
+							</div>
+						{/if}
+						{#if showMembersList}
+							<div
+								class="absolute top-full left-0 z-20 mt-1 flex max-h-64 w-64 flex-col rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700"
+							>
+								<div class="shrink-0 px-2 pb-1.5">
+									<input
+										type="search"
+										bind:value={membersSearch}
+										placeholder="Search by name…"
+										class="block w-full rounded-md border-0 bg-white px-2.5 py-1 text-sm text-gray-900 ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 dark:bg-gray-900 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
+									/>
+								</div>
+								<div class="min-h-0 flex-1 overflow-y-auto">
+								{#each filteredMembers as member (member.xmppUsername)}
+									{@const name = `${member.firstName} ${member.lastName}`.trim()}
+									<div class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200">
+										{#if member.profileImage}
+											<img
+												src={member.profileImage}
+												alt=""
+												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+											/>
+										{:else}
+											<span
+												class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+											>
+												{name.charAt(0).toUpperCase()}
+											</span>
+										{/if}
+										<span class="min-w-0 flex-1 truncate">
+											{member.xmppUsername === myNickname ? `${name} (you)` : name}
+										</span>
+										{#if member._id === selectedChat.createdBy}
+											<span
+												class="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
+											>
+												owner
+											</span>
+										{/if}
+										{#if xmppState.occupants[selectedChat.name]?.includes(member.xmppUsername)}
+											<span class="h-2 w-2 shrink-0 rounded-full bg-green-500"></span>
+										{/if}
+									</div>
+								{:else}
+									<p class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+										{membersSearch.trim() ? 'No one matches your search.' : 'No members.'}
+									</p>
+								{/each}
+								</div>
 							</div>
 						{/if}
 					</div>
@@ -1008,11 +1108,11 @@
 											<img
 												src={avatar}
 												alt=""
-												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+												class="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
 											/>
 										{:else}
 											<div
-												class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+												class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
 											>
 												{senderName(selectedChat, message).charAt(0).toUpperCase()}
 											</div>
@@ -1026,13 +1126,13 @@
 									>
 										<div class="flex items-baseline gap-2">
 											<span
-												class="text-xs font-semibold {mine
+												class="text-sm font-semibold {mine
 													? 'text-indigo-100'
 													: 'text-indigo-600 dark:text-indigo-400'}"
 											>
 												{senderName(selectedChat, message)}
 											</span>
-											<span class="text-[10px] {mine ? 'text-indigo-200' : 'text-gray-400 dark:text-gray-500'}">
+											<span class="text-xs {mine ? 'text-indigo-200' : 'text-gray-400 dark:text-gray-500'}">
 												{formatTime(message.timestamp)}
 											</span>
 										</div>
@@ -1074,7 +1174,7 @@
 												>
 													<span class="text-lg">📎</span>
 													<span class="min-w-0">
-														<span class="block truncate text-sm font-medium">
+														<span class="block truncate text-base font-medium">
 															{message.media.originalName || 'file'}
 														</span>
 														<span class="block text-xs {mine ? 'text-indigo-200' : 'text-gray-500 dark:text-gray-400'}">
@@ -1084,7 +1184,7 @@
 												</a>
 											{/if}
 										{:else}
-											<p class="text-sm whitespace-pre-wrap">
+											<p class="text-base whitespace-pre-wrap">
 												{#each bodyParts(message) as part, i (i)}
 													{#if part.type === 'link'}
 														<a
@@ -1218,7 +1318,7 @@
 								? 'Type a message…'
 								: 'Connecting…'}
 							disabled={xmppState.status !== 'online'}
-							class="block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500 dark:disabled:bg-gray-800/50"
+							class="block w-full rounded-md border-0 bg-white px-3 py-2 text-base text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500 dark:disabled:bg-gray-800/50"
 						/>
 						<button
 							type="submit"
@@ -1264,6 +1364,7 @@
 				</div>
 			{/if}
 		</section>
+	</div>
 	</div>
 </div>
 
