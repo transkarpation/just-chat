@@ -12,9 +12,12 @@ import {
 	ensureRoom,
 	prependMessages,
 	appendMessage,
+	removeMessage,
 	forgetRoom,
-	type ChatMessage
+	type ChatMessage,
+	type MessageMedia
 } from '$lib/state/messages.svelte';
+import type { UploadedFile } from '$lib/api/files';
 
 let xmpp: Client | null = null;
 let currentUser = '';
@@ -64,16 +67,27 @@ export async function connectAndJoinRooms(
 
 		const type = stanza.attrs.type;
 
-		// unavailable presence from the BARE room JID (no occupant nick)
-		// means the owner destroyed the room — drop it everywhere locally
+		// unavailable presence from the BARE room JID (no occupant nick):
+		// the room was destroyed, or we were removed from its members (the
+		// server sends this one only to the affected user) — drop it locally
 		if (!nick) {
 			if (type === 'unavailable') removeRoomLocally(room);
 			return;
 		}
 
+		const x = stanza.getChild('x', 'http://jabber.org/protocol/muc#user');
+		const codes = x?.getChildren('status').map((s) => String(s.attrs.code)) ?? [];
+
 		// occupant roster: the server sends one available presence per occupant
 		// on join, then live updates as people come and go
 		if (type === 'unavailable') {
+			// self-presence with 110 + 321/307/301 (XEP-0045): the owner removed
+			// us from the members / we were kicked or banned — the room is gone
+			// for this user, drop it locally right away
+			if (codes.includes('110') && ['321', '307', '301'].some((c) => codes.includes(c))) {
+				removeRoomLocally(room);
+				return;
+			}
 			const occupants = xmppState.occupants[room];
 			if (occupants) {
 				xmppState.occupants[room] = occupants.filter((n) => n !== nick);
@@ -85,10 +99,9 @@ export async function connectAndJoinRooms(
 			}
 		}
 
-		// a MUC join is confirmed by a self-presence carrying status code 110
-		const x = stanza.getChild('x', 'http://jabber.org/protocol/muc#user');
-		const codes = x?.getChildren('status').map((s) => s.attrs.code) ?? [];
-		if (codes.includes('110') && !xmppState.joinedRooms.includes(room)) {
+		// a MUC join is confirmed by an AVAILABLE self-presence carrying status
+		// code 110 (an unavailable one with 110 is us leaving, not joining)
+		if (!type && codes.includes('110') && !xmppState.joinedRooms.includes(room)) {
 			xmppState.joinedRooms.push(room);
 		}
 	});
@@ -99,11 +112,17 @@ export async function connectAndJoinRooms(
 		if (!stanza.is('message') || stanza.attrs.type !== 'groupchat') return;
 		if (stanza.getChild('result', 'urn:xmpp:mam:2')) return; // MAM page, handled elsewhere
 		if (stanza.getChild('delay', 'urn:xmpp:delay')) return; // join-time history replay, MAM covers it
-		const body = stanza.getChildText('body');
-		if (!body) return;
 		const [bareJid, nick] = String(stanza.attrs.from ?? '').split('/');
 		const [room, host] = (bareJid ?? '').split('@');
 		if (host !== PUBLIC_XMPP_CONFERENCE || !room || !nick) return;
+		// a reflected deletion — the body is empty, only <delete id> matters
+		const deleted = stanza.getChild('delete');
+		if (deleted?.attrs.id) {
+			removeMessage(room, String(deleted.attrs.id));
+			return;
+		}
+		const body = stanza.getChildText('body');
+		if (!body) return;
 		appendMessage(room, {
 			id:
 				stanza.getChild('stanza-id', 'urn:xmpp:sid:0')?.attrs.id ??
@@ -112,7 +131,7 @@ export async function connectAndJoinRooms(
 			nickname: nick,
 			body,
 			timestamp: new Date().toISOString(),
-			...senderMeta(stanza)
+			media: mediaMeta(stanza)
 		});
 		notifyIfBackgrounded(room, nick, body);
 	});
@@ -172,7 +191,10 @@ function notifyIfBackgrounded(roomName: string, nickname: string, body: string):
 		? `${member.firstName} ${member.lastName}`.trim()
 		: (nickname.split('_')[1]?.slice(0, 8) ?? nickname);
 
-	const notification = new Notification(chat?.title ?? 'New message', {
+	// the server-side title of a private (1-1) chat is unreliable —
+	// the sender's name is the natural title there anyway
+	const title = (chat?.type === 'private' ? sender : chat?.title) || 'New message';
+	const notification = new Notification(title, {
 		body: `${sender}: ${body}`,
 		icon: chat?.picture || undefined,
 		// one notification per room: a newer message replaces the previous one
@@ -220,13 +242,16 @@ async function fetchRoomHistory(
 		const message = forwarded?.getChild('message');
 		const body = message?.getChildText('body');
 		if (!message || !body) return; // skip bodyless archive entries
+		// deleted messages stay in the archive as tombstones: the body
+		// becomes "deleted" and a <deleted> element is attached
+		if (message.getChild('deleted')) return;
 		collected.push({
 			id: String(result.attrs.id),
 			roomName,
 			nickname: String(message.attrs.from ?? '').split('/')[1] ?? '',
 			body,
 			timestamp: forwarded?.getChild('delay', 'urn:xmpp:delay')?.attrs.stamp ?? '',
-			...senderMeta(message)
+			media: mediaMeta(message)
 		});
 	};
 
@@ -313,21 +338,23 @@ export async function subscribeToRoom(roomName: string, nickname: string): Promi
 }
 
 /**
- * Ethora convention: each message carries a <data> element with the sender's
- * profile at the moment of sending (names, photoURL). Read it if present.
+ * Ethora convention for attachments: the message body is the literal "media"
+ * and the file metadata travels in a <data isMediafile="true"> element.
  */
-function senderMeta(message: ReturnType<typeof xml>): {
-	senderName?: string;
-	avatar?: string;
-} {
+function mediaMeta(message: ReturnType<typeof xml>): MessageMedia | undefined {
 	const data = message.getChild('data');
-	if (!data) return {};
-	const name = `${data.attrs.senderFirstName ?? ''} ${data.attrs.senderLastName ?? ''}`.trim();
-	const avatar = data.attrs.photoURL || data.attrs.photo || undefined;
-	return { senderName: name || undefined, avatar };
+	if (data?.attrs.isMediafile !== 'true' || !data.attrs.location) return undefined;
+	return {
+		location: String(data.attrs.location),
+		locationPreview: String(data.attrs.locationPreview || data.attrs.location),
+		mimetype: String(data.attrs.mimetype ?? ''),
+		originalName: String(data.attrs.originalName ?? ''),
+		size: Number(data.attrs.size) || 0
+	};
 }
 
-/** Remove every local trace of a room that was deleted by its owner. */
+/** Remove every local trace of a room the user lost access to
+ * (deleted/destroyed by the owner, or the user was removed from it). */
 function removeRoomLocally(roomName: string): void {
 	if (!chatsState.items.some((chat) => chat.name === roomName)) return;
 	setChats(chatsState.items.filter((chat) => chat.name !== roomName));
@@ -373,26 +400,115 @@ export async function sendRoomMessage(roomName: string, body: string): Promise<v
 	if (!xmpp || xmppState.status !== 'online') {
 		throw new Error('XMPP is not connected');
 	}
-	const firstName = localStorage.getItem('firstName') ?? '';
-	const lastName = localStorage.getItem('lastName') ?? '';
-	const photoURL = localStorage.getItem('profileImage') ?? '';
 	await xmpp.send(
 		xml(
 			'message',
 			{ type: 'groupchat', to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}` },
-			xml('body', {}, body),
-			// Ethora convention: attach the sender's profile so every client
-			// (including ours) can render the name and avatar
+			xml('body', {}, body)
+		)
+	);
+}
+
+/**
+ * Send an already-uploaded file (POST /v1/files/) to a room. The stanza
+ * follows the Ethora media format: body "media", a store hint so the server
+ * archives it, and the file metadata in a <data isMediafile="true"> element.
+ */
+export async function sendMediaMessage(roomName: string, file: UploadedFile): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') {
+		throw new Error('XMPP is not connected');
+	}
+	await xmpp.send(
+		xml(
+			'message',
+			{
+				id: `send-media-message:${crypto.randomUUID()}`,
+				type: 'groupchat',
+				to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`
+			},
+			xml('body', {}, 'media'),
+			xml('store', { xmlns: 'urn:xmpp:hints' }),
 			xml('data', {
-				xmlns: PUBLIC_XMPP_WS,
-				senderFirstName: firstName,
-				senderLastName: lastName,
-				fullName: `${firstName} ${lastName}`.trim(),
-				photoURL,
 				senderJID: `${currentUser}@${PUBLIC_XMPP_HOST}`,
+				senderFirstName: localStorage.getItem('firstName') ?? '',
+				senderLastName: localStorage.getItem('lastName') ?? '',
+				senderWalletAddress: file.ownerKey,
+				isSystemMessage: 'false',
+				tokenAmount: '0',
+				receiverMessageId: '0',
+				photoURL: localStorage.getItem('profileImage') ?? '',
+				isMediafile: 'true',
+				createdAt: file.createdAt,
+				expiresAt: String(file.expiresAt),
+				fileName: file.filename,
+				location: file.location,
+				locationPreview: file.locationPreview,
+				mimetype: file.mimetype,
+				originalName: file.originalname,
+				ownerKey: file.ownerKey,
+				size: String(file.size),
+				updatedAt: file.updatedAt,
+				userId: file.userId,
+				attachmentId: file._id,
+				isReply: 'false',
+				showInChannel: 'false',
+				mainMessage: '',
 				roomJid: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`,
-				isSystemMessage: 'false'
+				push: 'true'
 			})
+		)
+	);
+}
+
+/**
+ * Leave a room. Dropping the MUC/Sub subscription is what removes the
+ * backend membership — the `nick` attribute is required for the backend to
+ * register the removal, and it propagates asynchronously (up to ~1 min
+ * observed), so the room is removed from local state right away instead of
+ * waiting for /chats/my to catch up.
+ */
+export async function leaveRoom(roomName: string): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') {
+		throw new Error('XMPP is not connected');
+	}
+	await xmpp.iqCaller.request(
+		xml(
+			'iq',
+			{ type: 'set', to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}` },
+			xml('unsubscribe', { xmlns: 'urn:xmpp:mucsub:0', nick: currentUser })
+		),
+		15_000
+	);
+	// also end the occupant session in the room
+	await xmpp.send(
+		xml('presence', {
+			to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}/${currentUser}`,
+			type: 'unavailable'
+		})
+	);
+	removeRoomLocally(roomName);
+}
+
+/**
+ * Delete a message in a room by its archive id. Local state is not touched
+ * here: the server reflects the <delete> back to every occupant (us included)
+ * and the live handler removes the message then. In the MAM archive the
+ * message stays as a tombstone, which history loading filters out.
+ */
+export async function deleteRoomMessage(roomName: string, messageId: string): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') {
+		throw new Error('XMPP is not connected');
+	}
+	await xmpp.send(
+		xml(
+			'message',
+			{
+				id: 'deleteMessageStanza',
+				type: 'groupchat',
+				to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`
+			},
+			xml('body', { xmlns: 'wow' }),
+			xml('delete', { id: messageId })
 		)
 	);
 }

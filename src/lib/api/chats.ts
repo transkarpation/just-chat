@@ -6,6 +6,8 @@ export interface ChatMember {
 	lastName: string;
 	xmppUsername: string;
 	description?: string;
+	/** avatar URL — present when the user has set a profile photo */
+	profileImage?: string;
 }
 
 export interface Chat {
@@ -73,6 +75,77 @@ export interface DeleteChatResponse {
  */
 export async function deleteChat(name: string): Promise<DeleteChatResponse> {
 	const { data } = await api.delete<DeleteChatResponse>('/v1/chats', { data: { name } });
+	return data;
+}
+
+/** The private-chat result carries both members; `createdBy` is absent. */
+export interface PrivateChat {
+	_id: string;
+	name: string;
+	isAppChat: boolean;
+	/** unreliable for private chats — derive the display title from members */
+	title: string;
+	description: string;
+	type: string;
+	picture: string;
+	appId: string;
+	createdAt: string;
+	updatedAt: string;
+	members: ChatMember[];
+}
+
+export interface CreatePrivateChatResponse {
+	result: PrivateChat;
+}
+
+/**
+ * Start a 1-1 chat with the given user (`xmppUsername`). Idempotent: if a
+ * private chat between the two users already exists, that one is returned.
+ * The chat shows up in /chats/my of both users.
+ */
+export async function createPrivateChat(xmppUsername: string): Promise<CreatePrivateChatResponse> {
+	const { data } = await api.post<CreatePrivateChatResponse>('/v1/chats/private', {
+		username: xmppUsername
+	});
+	return data;
+}
+
+/** response of POST/DELETE /v2/chats/users-access */
+export interface UsersAccessResponse {
+	ok: boolean;
+	summary: { requested: number; byStatus: Record<string, number> };
+	details: { xmppUsername: string; status: string }[];
+}
+
+/**
+ * Add users to a chat (owner-scoped). `members` takes xmppUsernames.
+ * The new membership shows up in /chats/my of both sides immediately.
+ */
+export async function addChatMembers(
+	chatName: string,
+	members: string[]
+): Promise<UsersAccessResponse> {
+	const { data } = await api.post<UsersAccessResponse>('/v2/chats/users-access', {
+		chatName,
+		members
+	});
+	return data;
+}
+
+/**
+ * Remove users from a chat (owner-scoped). `members` takes xmppUsernames.
+ * The backend drops the membership asynchronously — /chats/my keeps showing
+ * the member for ~45s after a successful call, so update local state instead
+ * of refetching. Removing YOURSELF this way fails with CHAT_NOT_FOUND —
+ * self-leave only works via the XMPP MUC/Sub unsubscribe (see leaveRoom).
+ */
+export async function removeChatMembers(
+	chatName: string,
+	members: string[]
+): Promise<UsersAccessResponse> {
+	const { data } = await api.delete<UsersAccessResponse>('/v2/chats/users-access', {
+		data: { chatName, members }
+	});
 	return data;
 }
 

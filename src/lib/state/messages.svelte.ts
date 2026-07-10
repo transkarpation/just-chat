@@ -1,3 +1,11 @@
+export interface MessageMedia {
+	location: string;
+	locationPreview: string;
+	mimetype: string;
+	originalName: string;
+	size: number;
+}
+
 export interface ChatMessage {
 	/** MAM archive id — unique and chronologically sortable */
 	id: string;
@@ -7,10 +15,8 @@ export interface ChatMessage {
 	body: string;
 	/** ISO timestamp from the archive's <delay> element */
 	timestamp: string;
-	/** display name carried by the Ethora <data> element, if present */
-	senderName?: string;
-	/** avatar URL carried by the Ethora <data> element, if present */
-	avatar?: string;
+	/** attached file — the body is the literal "media" for these messages */
+	media?: MessageMedia;
 }
 
 export interface RoomMessages {
@@ -60,6 +66,13 @@ export function appendMessage(roomName: string, message: ChatMessage): void {
 	const room = ensureRoom(roomName);
 	if (room.messages.some((m) => m.id === message.id)) return;
 	room.messages = [...room.messages, message];
+}
+
+/** Drop a message that was deleted in the room. */
+export function removeMessage(roomName: string, messageId: string): void {
+	const room = messagesState.rooms[roomName];
+	if (!room) return;
+	room.messages = room.messages.filter((m) => m.id !== messageId);
 }
 
 export function lastMessage(roomName: string): ChatMessage | undefined {

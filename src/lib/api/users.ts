@@ -1,5 +1,35 @@
+import { isAxiosError } from 'axios';
 import { api } from './client';
 import type { LoginUser } from './auth';
+
+/** user record from GET /v2/chats/users?xmppUsername=... */
+export interface UserRecord {
+	_id: string;
+	firstName: string;
+	lastName: string;
+	email?: string;
+	profileImage?: string;
+	xmppUsername: string;
+}
+
+/**
+ * Look up an app user by xmppUsername. Works with the user JWT (unlike
+ * /v1/apps/users/{xmppUsername}, which wants a B2B server token) and returns
+ * the same record. Returns null when the account no longer exists
+ * (404 USER_NOT_FOUND) — that's how a deleted account is told apart from a
+ * user who was merely removed from a chat.
+ */
+export async function getUserByXmppUsername(xmppUsername: string): Promise<UserRecord | null> {
+	try {
+		const { data } = await api.get<{ result: UserRecord }>('/v2/chats/users', {
+			params: { xmppUsername }
+		});
+		return data.result;
+	} catch (err) {
+		if (isAxiosError(err) && err.response?.status === 404) return null;
+		throw err;
+	}
+}
 
 /**
  * PUT /v1/users takes multipart/form-data. Every field is optional —

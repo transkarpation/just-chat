@@ -26,6 +26,7 @@
 	"dependencies": {
 		"@xmpp/client": "^0.14.0",
 		"axios": "^1.18.1",
-		"bits-ui": "^2.18.1"
+		"bits-ui": "^2.18.1",
+		"photoswipe": "^5.4.4"
 	}
 }

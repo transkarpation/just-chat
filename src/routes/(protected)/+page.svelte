@@ -2,17 +2,15 @@
 	import { onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Dialog, Tabs } from 'bits-ui';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-	import {
-		getMyChats,
-		createChat,
-		deleteChat,
-		type Chat,
-		type ChatMember
-	} from '$lib/api/chats';
+	import CreateChatDialog from '$lib/components/CreateChatDialog.svelte';
+	import ManageMembersDialog from '$lib/components/ManageMembersDialog.svelte';
+	import { getMyChats, deleteChat, type Chat } from '$lib/api/chats';
+	import { uploadFile } from '$lib/api/files';
+	import { openImageGallery } from '$lib/lightbox';
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { chatsState, setChats, clearChats } from '$lib/state/chats.svelte';
+	import { userLookupState, lookupUser, clearUserLookups } from '$lib/state/users.svelte';
 	import { xmppState } from '$lib/state/xmpp.svelte';
 	import {
 		messagesState,
@@ -27,6 +25,9 @@
 		loadLastMessages,
 		loadOlderMessages,
 		sendRoomMessage,
+		sendMediaMessage,
+		deleteRoomMessage,
+		leaveRoom,
 		subscribeToRoom
 	} from '$lib/xmpp/client';
 
@@ -45,47 +46,7 @@
 	let sending = $state(false);
 	let sendError = $state('');
 	let showNewChat = $state(false);
-	let newChatTitle = $state('');
-	let newChatType = $state<'public' | 'group'>('public');
-	let newChatMembers = $state<string[]>([]);
-	let creatingChat = $state(false);
-	let createError = $state('');
-
-	// everyone seen across the members of my chats, deduped by xmppUsername —
-	// the identifier the create-chat endpoint expects in `members`
-	const memberCandidates = $derived.by(() => {
-		const seen = new Map<string, ChatMember>();
-		for (const chat of chatsState.items) {
-			for (const member of chat.members) {
-				if (member.xmppUsername === myNickname) continue;
-				if (!seen.has(member.xmppUsername)) seen.set(member.xmppUsername, member);
-			}
-		}
-		return [...seen.values()].sort((a, b) =>
-			`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)
-		);
-	});
-
-	let memberTab = $state('all');
-
-	// someone is online if their nickname is present in any room's occupants
-	const onlineNicknames = $derived.by(() => {
-		const nicknames = new Set<string>();
-		for (const roomOccupants of Object.values(xmppState.occupants)) {
-			for (const nickname of roomOccupants) nicknames.add(nickname);
-		}
-		return nicknames;
-	});
-	const onlineCandidates = $derived(
-		memberCandidates.filter((m) => onlineNicknames.has(m.xmppUsername))
-	);
-	const visibleCandidates = $derived(
-		memberTab === 'online'
-			? onlineCandidates
-			: memberTab === 'selected'
-				? memberCandidates.filter((m) => newChatMembers.includes(m.xmppUsername))
-				: memberCandidates
-	);
+	let showMembers = $state(false);
 
 	const selectedChat = $derived(
 		chatsState.items.find((chat) => chat.name === selectedRoom) ?? null
@@ -264,21 +225,53 @@
 		}
 	}
 
+	// the server-side title of a private (1-1) chat is unreliable — show
+	// the other participant's name instead
+	function chatTitle(chat: Chat): string {
+		if (chat.type === 'private') {
+			const other = chat.members.find((m) => m.xmppUsername !== myNickname);
+			if (other) return `${other.firstName} ${other.lastName}`.trim();
+		}
+		return chat.title;
+	}
+
 	function nickToName(chat: Chat, nickname: string): string {
 		if (nickname === myNickname) return 'You';
 		const member = chat.members.find((m) => m.xmppUsername === nickname);
 		if (member) return `${member.firstName} ${member.lastName}`.trim();
-		// unknown occupant — show a short readable piece of the nickname
+		// sender is not a member (anymore) — use the looked-up user record
+		const record = userLookupState.records[nickname];
+		if (record) return `${record.firstName} ${record.lastName}`.trim() + ' (former member)';
+		if (record === null) return 'Deleted user';
+		// lookup still running — show a short readable piece of the nickname
 		return nickname.split('_')[1]?.slice(0, 8) ?? nickname;
 	}
 
 	function senderName(chat: Chat, message: ChatMessage): string {
-		if (message.nickname === myNickname) return 'You';
-		const member = chat.members.find((m) => m.xmppUsername === message.nickname);
-		if (member) return `${member.firstName} ${member.lastName}`.trim();
-		// not in the member list — use the name the message itself carried
-		return message.senderName ?? nickToName(chat, message.nickname);
+		return nickToName(chat, message.nickname);
 	}
+
+	/** avatar URL from /chats/my member data (or the user lookup for senders
+	 * who are no longer members), if the sender has set one */
+	function senderAvatar(chat: Chat, message: ChatMessage): string | undefined {
+		const member = chat.members.find((m) => m.xmppUsername === message.nickname);
+		if (member) return member.profileImage || undefined;
+		return userLookupState.records[message.nickname]?.profileImage || undefined;
+	}
+
+	// resolve senders that are missing from the open chat's member list
+	// (removed from the chat or account deleted) via the users API
+	$effect(() => {
+		const chat = selectedChat;
+		const messages = selectedMessages?.messages;
+		if (!chat || !messages) return;
+		const members = new Set(chat.members.map((m) => m.xmppUsername));
+		for (const message of messages) {
+			if (message.nickname !== myNickname && !members.has(message.nickname)) {
+				lookupUser(message.nickname);
+			}
+		}
+	});
 
 	type BodyPart =
 		| { type: 'text'; value: string }
@@ -331,39 +324,21 @@
 		return new Date(timestamp).toLocaleString();
 	}
 
-	async function createNewChat() {
-		const title = newChatTitle.trim();
-		if (!title || creatingChat) return;
-		creatingChat = true;
-		createError = '';
-		try {
-			const created = await createChat({
-				title,
-				type: newChatType,
-				members: newChatMembers
-			});
-			// refetch so the new chat has the canonical /chats/my shape
-			const chats = await getMyChats();
-			setChats(chats.items);
+	// the dialog created the chat; sync everything around it and open it
+	async function onChatCreated(roomName: string) {
+		// refetch so the new chat has the canonical /chats/my shape
+		const chats = await getMyChats();
+		setChats(chats.items);
 
-			const xmppUsername = localStorage.getItem('xmppUsername');
-			const xmppPassword = localStorage.getItem('xmppPassword');
-			if (xmppUsername && xmppPassword) {
-				const roomNames = chatsState.items.map((chat) => chat.name);
-				await connectAndJoinRooms(xmppUsername, xmppPassword, roomNames);
-				await loadLastMessages(roomNames);
-			}
-
-			newChatTitle = '';
-			newChatType = 'public';
-			newChatMembers = [];
-			showNewChat = false;
-			await selectChat(created.result.name);
-		} catch (err) {
-			createError = getApiErrorMessage(err);
-		} finally {
-			creatingChat = false;
+		const xmppUsername = localStorage.getItem('xmppUsername');
+		const xmppPassword = localStorage.getItem('xmppPassword');
+		if (xmppUsername && xmppPassword) {
+			const roomNames = chatsState.items.map((chat) => chat.name);
+			await connectAndJoinRooms(xmppUsername, xmppPassword, roomNames);
+			await loadLastMessages(roomNames);
 		}
+
+		await selectChat(roomName);
 	}
 
 	let deletingChat = $state(false);
@@ -391,6 +366,25 @@
 		}
 	}
 
+	let leavingChat = $state(false);
+	let confirmLeaveOpen = $state(false);
+
+	async function leaveCurrentChat() {
+		if (!selectedChat || leavingChat) return;
+		leavingChat = true;
+		deleteError = '';
+		try {
+			// removes the room from local state itself; the backend drops
+			// the membership asynchronously
+			await leaveRoom(selectedChat.name);
+		} catch (err) {
+			console.error('leaving chat failed:', err);
+			deleteError = 'Failed to leave the chat. Check the connection and try again.';
+		} finally {
+			leavingChat = false;
+		}
+	}
+
 	let linkCopied = $state(false);
 	async function copyRoomLink() {
 		if (!selectedChat) return;
@@ -398,6 +392,74 @@
 		await navigator.clipboard.writeText(link);
 		linkCopied = true;
 		setTimeout(() => (linkCopied = false), 2000);
+	}
+
+	let mediaInputEl = $state<HTMLInputElement | null>(null);
+	let sendingMedia = $state(false);
+
+	async function sendMedia(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file || !selectedRoom || sendingMedia) return;
+		sendingMedia = true;
+		sendError = '';
+		try {
+			const uploaded = await uploadFile(file);
+			await sendMediaMessage(selectedRoom, uploaded);
+		} catch (err) {
+			console.error('media send failed:', err);
+			sendError = 'Failed to send the file. Check the connection and try again.';
+		} finally {
+			sendingMedia = false;
+			input.value = ''; // allow re-selecting the same file
+		}
+	}
+
+	// every image of the open chat, oldest → newest — one PhotoSwipe gallery,
+	// so the viewer can swipe between all pictures of the conversation
+	const roomImages = $derived(
+		(selectedMessages?.messages ?? []).filter((m) => m.media?.mimetype.startsWith('image/'))
+	);
+
+	function openImage(messageId: string) {
+		const index = roomImages.findIndex((m) => m.id === messageId);
+		if (index === -1) return;
+		openImageGallery(
+			roomImages.map((m) => ({
+				src: m.media!.location,
+				msrc: m.media!.locationPreview,
+				alt: m.media!.originalName
+			})),
+			index
+		);
+	}
+
+	let messageToDelete = $state<ChatMessage | null>(null);
+	let confirmDeleteMessageOpen = $state(false);
+
+	function askDeleteMessage(message: ChatMessage) {
+		messageToDelete = message;
+		confirmDeleteMessageOpen = true;
+	}
+
+	async function deleteMessageConfirmed() {
+		const message = messageToDelete;
+		messageToDelete = null;
+		if (!message) return;
+		try {
+			// the message disappears from state when the server reflects
+			// the <delete> back to the room
+			await deleteRoomMessage(message.roomName, message.id);
+		} catch (err) {
+			console.error('message delete failed:', err);
+			sendError = 'Failed to delete the message. Check the connection and try again.';
+		}
+	}
+
+	function formatSize(bytes: number): string {
+		if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+		if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+		return `${bytes} B`;
 	}
 
 	async function sendMessage() {
@@ -436,6 +498,7 @@
 		localStorage.removeItem('description');
 		clearChats();
 		clearMessages();
+		clearUserLookups();
 		goto('/login');
 	}
 </script>
@@ -532,11 +595,7 @@
 					{/if}
 					<button
 						type="button"
-						onclick={() => {
-							createError = '';
-							memberTab = 'all';
-							showNewChat = true;
-						}}
+						onclick={() => (showNewChat = true)}
 						class="rounded-md bg-indigo-600 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-500"
 					>
 						+ New
@@ -574,13 +633,13 @@
 										<div
 											class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700"
 										>
-											{chat.title.charAt(0).toUpperCase()}
+											{chatTitle(chat).charAt(0).toUpperCase()}
 										</div>
 									{/if}
 
 									<div class="min-w-0 flex-1">
 										<div class="flex items-center gap-1.5">
-											<p class="truncate text-sm font-medium text-gray-900">{chat.title}</p>
+											<p class="truncate text-sm font-medium text-gray-900">{chatTitle(chat)}</p>
 											{#if chat.createdBy && chat.createdBy === myUserId}
 												<span
 													class="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700"
@@ -595,7 +654,7 @@
 										{#if last}
 											<p class="truncate text-xs text-gray-500">
 												<span class="font-medium">{senderName(chat, last)}:</span>
-												{last.body}
+												{last.media ? `📎 ${last.media.originalName || 'file'}` : last.body}
 											</p>
 										{:else if chat.description}
 											<p class="truncate text-xs text-gray-500">{chat.description}</p>
@@ -616,7 +675,7 @@
 					class="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6"
 				>
 					<div class="relative min-w-0">
-						<h3 class="truncate font-semibold text-gray-900">{selectedChat.title}</h3>
+						<h3 class="truncate font-semibold text-gray-900">{chatTitle(selectedChat)}</h3>
 						<p class="text-xs text-gray-500">
 							{selectedChat.members.length}
 							{selectedChat.members.length === 1 ? 'member' : 'members'}
@@ -660,6 +719,15 @@
 							>
 								created by you
 							</span>
+							{#if selectedChat.type !== 'private'}
+								<button
+									type="button"
+									onclick={() => (showMembers = true)}
+									class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+								>
+									Members
+								</button>
+							{/if}
 							<button
 								type="button"
 								onclick={() => (confirmDeleteOpen = true)}
@@ -667,6 +735,15 @@
 								class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50 disabled:opacity-50"
 							>
 								{deletingChat ? 'Deleting…' : 'Delete'}
+							</button>
+						{:else}
+							<button
+								type="button"
+								onclick={() => (confirmLeaveOpen = true)}
+								disabled={leavingChat || xmppState.status !== 'online'}
+								class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50 disabled:opacity-50"
+							>
+								{leavingChat ? 'Leaving…' : 'Leave'}
 							</button>
 						{/if}
 						<button
@@ -721,11 +798,23 @@
 						<ul class="space-y-4">
 							{#each selectedMessages.messages as message (message.id)}
 								{@const mine = message.nickname === myNickname}
-								<li class="flex items-end gap-2 {mine ? 'justify-end' : 'justify-start'}">
+								{@const avatar = senderAvatar(selectedChat, message)}
+								<li class="group flex items-end gap-2 {mine ? 'justify-end' : 'justify-start'}">
+									{#if mine}
+										<button
+											type="button"
+											onclick={() => askDeleteMessage(message)}
+											aria-label="Delete message"
+											title="Delete message"
+											class="self-center rounded-md p-1 text-sm text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-gray-200 hover:text-red-600 focus-visible:opacity-100"
+										>
+											🗑
+										</button>
+									{/if}
 									{#if !mine}
-										{#if message.avatar}
+										{#if avatar}
 											<img
-												src={message.avatar}
+												src={avatar}
 												alt=""
 												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200"
 											/>
@@ -752,22 +841,71 @@
 												{formatTime(message.timestamp)}
 											</span>
 										</div>
-										<p class="text-sm whitespace-pre-wrap">
-											{#each linkify(message.body) as part, i (i)}
-												{#if part.type === 'link'}
-													<a
-														href={part.href}
-														target={part.internal ? undefined : '_blank'}
-														rel={part.internal ? undefined : 'noopener noreferrer'}
-														class="font-medium underline underline-offset-2 {mine
-															? 'text-white hover:text-indigo-100'
-															: 'text-indigo-600 hover:text-indigo-500'}"
-													>{part.value}</a>
-												{:else}
-													{part.value}
-												{/if}
-											{/each}
-										</p>
+										{#if message.media}
+											{#if message.media.mimetype.startsWith('image/')}
+												{@const newest = message.id === selectedMessages.messages.at(-1)?.id}
+												<button
+													type="button"
+													onclick={() => openImage(message.id)}
+													class="block cursor-zoom-in"
+													aria-label="View {message.media.originalName || 'image'} full size"
+												>
+													<!-- the image gets its height after the scroll-to-bottom ran;
+													     re-scroll when the newest one finishes loading -->
+													<img
+														src={message.media.locationPreview}
+														alt={message.media.originalName}
+														onload={newest ? () => scrollToBottom() : undefined}
+														class="mt-1 max-h-64 rounded-lg object-contain"
+													/>
+												</button>
+											{:else if message.media.mimetype.startsWith('video/')}
+												<!-- svelte-ignore a11y_media_has_caption -->
+												<video
+													src={message.media.location}
+													controls
+													class="mt-1 max-h-64 rounded-lg"
+												></video>
+											{:else if message.media.mimetype.startsWith('audio/')}
+												<audio src={message.media.location} controls class="mt-1"></audio>
+											{:else}
+												<a
+													href={message.media.location}
+													target="_blank"
+													rel="noopener noreferrer"
+													class="mt-1 flex items-center gap-2 rounded-lg px-3 py-2 {mine
+														? 'bg-indigo-500/60 hover:bg-indigo-500'
+														: 'bg-gray-100 hover:bg-gray-200'}"
+												>
+													<span class="text-lg">📎</span>
+													<span class="min-w-0">
+														<span class="block truncate text-sm font-medium">
+															{message.media.originalName || 'file'}
+														</span>
+														<span class="block text-xs {mine ? 'text-indigo-200' : 'text-gray-500'}">
+															{formatSize(message.media.size)}
+														</span>
+													</span>
+												</a>
+											{/if}
+										{:else}
+											<p class="text-sm whitespace-pre-wrap">
+												{#each linkify(message.body) as part, i (i)}
+													{#if part.type === 'link'}
+														<a
+															href={part.href}
+															target={part.internal ? undefined : '_blank'}
+															rel={part.internal ? undefined : 'noopener noreferrer'}
+															class="font-medium underline underline-offset-2 {mine
+																? 'text-white hover:text-indigo-100'
+																: 'text-indigo-600 hover:text-indigo-500'}"
+														>{part.value}</a>
+													{:else}
+														{part.value}
+													{/if}
+												{/each}
+											</p>
+										{/if}
 									</div>
 								</li>
 							{/each}
@@ -786,6 +924,17 @@
 						<p class="mb-2 text-xs text-red-600" role="alert">{sendError}</p>
 					{/if}
 					<div class="flex gap-2">
+						<input type="file" class="hidden" bind:this={mediaInputEl} onchange={sendMedia} />
+						<button
+							type="button"
+							onclick={() => mediaInputEl?.click()}
+							disabled={sendingMedia || xmppState.status !== 'online'}
+							title="Attach a file"
+							aria-label="Attach a file"
+							class="shrink-0 rounded-md bg-white px-3 py-2 text-sm text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{sendingMedia ? '…' : '📎'}
+						</button>
 						<input
 							type="text"
 							bind:this={composerEl}
@@ -836,140 +985,34 @@
 </div>
 
 <ConfirmDialog
+	bind:open={confirmLeaveOpen}
+	title={`Leave "${selectedChat ? chatTitle(selectedChat) : ''}"?`}
+	description="The chat will disappear from your list. You can join it again later via a room link or an invite."
+	confirmLabel="Leave"
+	destructive
+	onconfirm={leaveCurrentChat}
+/>
+
+<ConfirmDialog
+	bind:open={confirmDeleteMessageOpen}
+	title="Delete this message?"
+	description="The message will be removed for everyone in the room. This cannot be undone."
+	confirmLabel="Delete"
+	destructive
+	onconfirm={deleteMessageConfirmed}
+/>
+
+<ConfirmDialog
 	bind:open={confirmDeleteOpen}
-	title={`Delete "${selectedChat?.title ?? ''}"?`}
+	title={`Delete "${selectedChat ? chatTitle(selectedChat) : ''}"?`}
 	description="The room and its message history will be removed for all members. This cannot be undone."
 	confirmLabel="Delete"
 	destructive
 	onconfirm={deleteCurrentChat}
 />
 
-<Dialog.Root bind:open={showNewChat}>
-	<Dialog.Portal>
-		<Dialog.Overlay class="fixed inset-0 z-40 bg-gray-900/40" />
-		<Dialog.Content
-			class="fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
-		>
-			<Dialog.Title class="text-base font-semibold text-gray-900">Create a new chat</Dialog.Title>
+<CreateChatDialog bind:open={showNewChat} {myNickname} oncreated={onChatCreated} />
 
-			<form
-				class="mt-4"
-				onsubmit={(event) => {
-					event.preventDefault();
-					createNewChat();
-				}}
-			>
-				{#if createError}
-					<p class="mb-2 text-xs text-red-600" role="alert">{createError}</p>
-				{/if}
-				<input
-					type="text"
-					bind:value={newChatTitle}
-					placeholder="Chat title"
-					class="block w-full rounded-md border-0 px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600"
-				/>
-
-				<!-- min-w-0 overrides the fieldset default min-width: min-content,
-				     which otherwise lets long member names blow out the dialog width -->
-				<fieldset class="mt-4 min-w-0">
-					<legend class="text-xs font-medium text-gray-700">Chat type</legend>
-					<div class="mt-1.5 grid grid-cols-2 gap-2">
-						<label
-							class="cursor-pointer rounded-lg p-3 ring-1 ring-inset {newChatType === 'public'
-								? 'bg-indigo-50 ring-indigo-600'
-								: 'ring-gray-300 hover:bg-gray-50'}"
-						>
-							<input type="radio" bind:group={newChatType} value="public" class="sr-only" />
-							<span class="block text-sm font-medium text-gray-900">Public</span>
-							<span class="mt-0.5 block text-xs text-gray-500">
-								Anyone in the app can join via a link.
-							</span>
-						</label>
-						<label
-							class="cursor-pointer rounded-lg p-3 ring-1 ring-inset {newChatType === 'group'
-								? 'bg-indigo-50 ring-indigo-600'
-								: 'ring-gray-300 hover:bg-gray-50'}"
-						>
-							<input type="radio" bind:group={newChatType} value="group" class="sr-only" />
-							<span class="block text-sm font-medium text-gray-900">Group</span>
-							<span class="mt-0.5 block text-xs text-gray-500">
-								A chat for you and the selected members.
-							</span>
-						</label>
-					</div>
-				</fieldset>
-
-				<fieldset class="mt-4 min-w-0">
-					<legend class="text-xs font-medium text-gray-700">Members</legend>
-					<Tabs.Root bind:value={memberTab}>
-						<Tabs.List class="mt-1.5 grid grid-cols-3 gap-1 rounded-lg bg-gray-100 p-1">
-							<Tabs.Trigger
-								value="all"
-								class="rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm"
-							>
-								All ({memberCandidates.length})
-							</Tabs.Trigger>
-							<Tabs.Trigger
-								value="online"
-								class="rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm"
-							>
-								Online ({onlineCandidates.length})
-							</Tabs.Trigger>
-							<Tabs.Trigger
-								value="selected"
-								class="rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm"
-							>
-								Selected ({newChatMembers.length})
-							</Tabs.Trigger>
-						</Tabs.List>
-					</Tabs.Root>
-					<div
-						class="mt-1.5 max-h-44 divide-y divide-gray-100 overflow-y-auto rounded-md ring-1 ring-inset ring-gray-200"
-					>
-						{#each visibleCandidates as member (member.xmppUsername)}
-							<label
-								class="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-gray-50"
-							>
-								<input
-									type="checkbox"
-									bind:group={newChatMembers}
-									value={member.xmppUsername}
-									class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600"
-								/>
-								<span class="min-w-0 flex-1 truncate text-gray-900">
-									{`${member.firstName} ${member.lastName}`.trim()}
-								</span>
-								{#if onlineNicknames.has(member.xmppUsername)}
-									<span class="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
-								{/if}
-							</label>
-						{:else}
-							<p class="px-3 py-2 text-sm text-gray-500">
-								{memberTab === 'online'
-									? 'Nobody from your chats is online right now.'
-									: memberTab === 'selected'
-										? 'No members selected yet.'
-										: 'No known users yet — they appear here from members of your chats.'}
-							</p>
-						{/each}
-					</div>
-				</fieldset>
-
-				<div class="mt-4 flex justify-end gap-2">
-					<Dialog.Close
-						class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
-					>
-						Cancel
-					</Dialog.Close>
-					<button
-						type="submit"
-						disabled={!newChatTitle.trim() || creatingChat}
-						class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						{creatingChat ? 'Creating…' : 'Create'}
-					</button>
-				</div>
-			</form>
-		</Dialog.Content>
-	</Dialog.Portal>
-</Dialog.Root>
+{#if selectedChat}
+	<ManageMembersDialog bind:open={showMembers} chat={selectedChat} {myNickname} />
+{/if}
