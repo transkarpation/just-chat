@@ -7,11 +7,11 @@ function audioContext(): AudioContext | null {
 }
 
 /**
- * Short two-note chime, synthesized so no audio asset is needed. Browsers
- * keep the AudioContext suspended until the user interacts with the page —
- * before that the sound is silently skipped.
+ * Short two-note chime (A5 then D6), synthesized so no audio asset is
+ * needed. Browsers keep the AudioContext suspended until the user interacts
+ * with the page — before that the sound is silently skipped.
  */
-export async function playMentionSound(): Promise<void> {
+async function playChime(volume: number): Promise<void> {
 	const ac = audioContext();
 	if (!ac) return;
 	if (ac.state === 'suspended') {
@@ -23,7 +23,6 @@ export async function playMentionSound(): Promise<void> {
 	}
 	if (ac.state !== 'running') return;
 	const now = ac.currentTime;
-	// A5 then D6 — a quick rising "you were pinged" chime
 	const notes: [frequency: number, offset: number][] = [
 		[880, 0],
 		[1174.66, 0.09]
@@ -34,10 +33,20 @@ export async function playMentionSound(): Promise<void> {
 		osc.type = 'sine';
 		osc.frequency.value = frequency;
 		gain.gain.setValueAtTime(0, now + offset);
-		gain.gain.linearRampToValueAtTime(0.18, now + offset + 0.015);
+		gain.gain.linearRampToValueAtTime(volume, now + offset + 0.015);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.35);
 		osc.connect(gain).connect(ac.destination);
 		osc.start(now + offset);
 		osc.stop(now + offset + 0.4);
 	}
+}
+
+/** Attention-grabbing "you were pinged" chime. */
+export async function playMentionSound(): Promise<void> {
+	await playChime(0.18);
+}
+
+/** The same chime, much quieter — for ordinary incoming messages. */
+export async function playMessageSound(): Promise<void> {
+	await playChime(0.05);
 }

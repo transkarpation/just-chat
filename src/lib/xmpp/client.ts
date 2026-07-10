@@ -19,12 +19,23 @@ import {
 	type MessageMention
 } from '$lib/state/messages.svelte';
 import type { UploadedFile } from '$lib/api/files';
-import { playMentionSound } from '$lib/sound';
+import { playMentionSound, playMessageSound } from '$lib/sound';
 
 let xmpp: Client | null = null;
 let currentUser = '';
 let mamQueryCounter = 0;
 const handledInvites = new Set<string>();
+
+/**
+ * Marker put into the <status> of the unavailable presence when THIS app
+ * leaves a room voluntarily. On the wire a leave is otherwise identical to a
+ * connection drop; ejabberd relays the status text to the other occupants
+ * (verified live), so their clients can drop the leaver from the member list
+ * immediately instead of waiting for a /chats/my refetch. Must be matched
+ * exactly — the server writes its own status texts in some cases (e.g.
+ * "Replaced by new connection").
+ */
+const LEAVE_STATUS = 'svelt-check:left-room';
 
 /**
  * Connect to the XMPP server and join the given MUC rooms.
@@ -94,6 +105,15 @@ export async function connectAndJoinRooms(
 			if (occupants) {
 				xmppState.occupants[room] = occupants.filter((n) => n !== nick);
 			}
+			// another occupant left the room ON PURPOSE (our leave marker in
+			// the relayed <status>) — their membership is over, drop them from
+			// the member list right away; the backend catches up asynchronously
+			if (stanza.getChildText('status') === LEAVE_STATUS) {
+				const chat = chatsState.items.find((c) => c.name === room);
+				if (chat) {
+					chat.members = chat.members.filter((m) => m.xmppUsername !== nick);
+				}
+			}
 		} else if (!type) {
 			const occupants = xmppState.occupants[room] ?? [];
 			if (!occupants.includes(nick)) {
@@ -137,9 +157,21 @@ export async function connectAndJoinRooms(
 			media: mediaMeta(stanza),
 			mentions
 		});
-		// an audible ping when someone mentions this user, focused tab or not
-		if (nick !== currentUser && mentions?.some((m) => m.xmppUsername === currentUser)) {
-			void playMentionSound();
+		// an audible ping for incoming messages (never for own sends): a loud
+		// chime when this user is mentioned; a quiet tick for other messages,
+		// but only when they can be missed — hidden tab or a different chat
+		if (nick !== currentUser) {
+			if (mentions?.some((m) => m.xmppUsername === currentUser)) {
+				void playMentionSound();
+			} else {
+				const openRoom =
+					typeof location !== 'undefined'
+						? new URLSearchParams(location.search).get('roomId')
+						: null;
+				if (document.hidden || openRoom !== room) {
+					void playMessageSound();
+				}
+			}
 		}
 		notifyIfBackgrounded(room, nick, body, mentions);
 	});
@@ -532,12 +564,18 @@ export async function leaveRoom(roomName: string): Promise<void> {
 		),
 		15_000
 	);
-	// also end the occupant session in the room
+	// also end the occupant session in the room; the <status> marker tells
+	// other clients this is a deliberate exit (not a connection drop) so they
+	// can remove us from the member list immediately
 	await xmpp.send(
-		xml('presence', {
-			to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}/${currentUser}`,
-			type: 'unavailable'
-		})
+		xml(
+			'presence',
+			{
+				to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}/${currentUser}`,
+				type: 'unavailable'
+			},
+			xml('status', {}, LEAVE_STATUS)
+		)
 	);
 	removeRoomLocally(roomName);
 }
