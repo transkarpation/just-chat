@@ -15,9 +15,11 @@ import {
 	removeMessage,
 	forgetRoom,
 	type ChatMessage,
-	type MessageMedia
+	type MessageMedia,
+	type MessageMention
 } from '$lib/state/messages.svelte';
 import type { UploadedFile } from '$lib/api/files';
+import { playMentionSound } from '$lib/sound';
 
 let xmpp: Client | null = null;
 let currentUser = '';
@@ -123,6 +125,7 @@ export async function connectAndJoinRooms(
 		}
 		const body = stanza.getChildText('body');
 		if (!body) return;
+		const mentions = mentionsMeta(stanza);
 		appendMessage(room, {
 			id:
 				stanza.getChild('stanza-id', 'urn:xmpp:sid:0')?.attrs.id ??
@@ -131,9 +134,14 @@ export async function connectAndJoinRooms(
 			nickname: nick,
 			body,
 			timestamp: new Date().toISOString(),
-			media: mediaMeta(stanza)
+			media: mediaMeta(stanza),
+			mentions
 		});
-		notifyIfBackgrounded(room, nick, body);
+		// an audible ping when someone mentions this user, focused tab or not
+		if (nick !== currentUser && mentions?.some((m) => m.xmppUsername === currentUser)) {
+			void playMentionSound();
+		}
+		notifyIfBackgrounded(room, nick, body, mentions);
 	});
 
 	// mediated MUC invite (XEP-0045) — arrives when someone adds us as a
@@ -180,7 +188,12 @@ async function joinRooms(roomNames: string[], nickname: string): Promise<void> {
 }
 
 /** Show a browser notification for a live message while the tab is hidden. */
-function notifyIfBackgrounded(roomName: string, nickname: string, body: string): void {
+function notifyIfBackgrounded(
+	roomName: string,
+	nickname: string,
+	body: string,
+	mentions?: MessageMention[]
+): void {
 	if (typeof document === 'undefined' || !document.hidden) return;
 	if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
 	if (nickname === currentUser) return; // own message reflected back
@@ -193,7 +206,10 @@ function notifyIfBackgrounded(roomName: string, nickname: string, body: string):
 
 	// the server-side title of a private (1-1) chat is unreliable —
 	// the sender's name is the natural title there anyway
-	const title = (chat?.type === 'private' ? sender : chat?.title) || 'New message';
+	let title = (chat?.type === 'private' ? sender : chat?.title) || 'New message';
+	if (mentions?.some((m) => m.xmppUsername === currentUser)) {
+		title = `${sender} mentioned you`;
+	}
 	const notification = new Notification(title, {
 		body: `${sender}: ${body}`,
 		icon: chat?.picture || undefined,
@@ -251,7 +267,8 @@ async function fetchRoomHistory(
 			nickname: String(message.attrs.from ?? '').split('/')[1] ?? '',
 			body,
 			timestamp: forwarded?.getChild('delay', 'urn:xmpp:delay')?.attrs.stamp ?? '',
-			media: mediaMeta(message)
+			media: mediaMeta(message),
+			mentions: mentionsMeta(message)
 		});
 	};
 
@@ -353,6 +370,28 @@ function mediaMeta(message: ReturnType<typeof xml>): MessageMedia | undefined {
 	};
 }
 
+/**
+ * @-mentions travel as XEP-0372 reference elements next to the body:
+ * <reference xmlns="urn:xmpp:reference:0" type="mention"
+ *            begin=".." end=".." uri="xmpp:<xmppUsername>@host"/>
+ * begin/end are UTF-16 indices into the body (we are both writer and reader).
+ */
+function mentionsMeta(message: ReturnType<typeof xml>): MessageMention[] | undefined {
+	const mentions: MessageMention[] = [];
+	for (const ref of message.getChildren('reference')) {
+		if (ref.attrs.xmlns !== 'urn:xmpp:reference:0' || ref.attrs.type !== 'mention') continue;
+		const uri = String(ref.attrs.uri ?? '');
+		const xmppUsername = uri.replace(/^xmpp:/, '').split('@')[0];
+		const begin = Number(ref.attrs.begin);
+		const end = Number(ref.attrs.end);
+		if (!xmppUsername || !Number.isInteger(begin) || !Number.isInteger(end) || end <= begin) {
+			continue;
+		}
+		mentions.push({ begin, end, xmppUsername });
+	}
+	return mentions.length > 0 ? mentions : undefined;
+}
+
 /** Remove every local trace of a room the user lost access to
  * (deleted/destroyed by the owner, or the user was removed from it). */
 function removeRoomLocally(roomName: string): void {
@@ -395,8 +434,13 @@ async function acceptRoomInvite(roomName: string): Promise<void> {
 	}
 }
 
-/** Send a text message to a room. It appears in state via the MUC reflection. */
-export async function sendRoomMessage(roomName: string, body: string): Promise<void> {
+/** Send a text message to a room. It appears in state via the MUC reflection.
+ * Mentions (if any) are attached as XEP-0372 references — see mentionsMeta. */
+export async function sendRoomMessage(
+	roomName: string,
+	body: string,
+	mentions?: MessageMention[]
+): Promise<void> {
 	if (!xmpp || xmppState.status !== 'online') {
 		throw new Error('XMPP is not connected');
 	}
@@ -404,7 +448,16 @@ export async function sendRoomMessage(roomName: string, body: string): Promise<v
 		xml(
 			'message',
 			{ type: 'groupchat', to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}` },
-			xml('body', {}, body)
+			xml('body', {}, body),
+			...(mentions ?? []).map((mention) =>
+				xml('reference', {
+					xmlns: 'urn:xmpp:reference:0',
+					type: 'mention',
+					begin: String(mention.begin),
+					end: String(mention.end),
+					uri: `xmpp:${mention.xmppUsername}@${PUBLIC_XMPP_HOST}`
+				})
+			)
 		)
 	);
 }

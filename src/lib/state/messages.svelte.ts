@@ -6,6 +6,16 @@ export interface MessageMedia {
 	size: number;
 }
 
+/** an @-mention inside the message body (XEP-0372 reference) */
+export interface MessageMention {
+	/** UTF-16 index of the first char of the `@Name` token in body */
+	begin: number;
+	/** UTF-16 index one past the last char of the token */
+	end: number;
+	/** xmppUsername of the mentioned user */
+	xmppUsername: string;
+}
+
 export interface ChatMessage {
 	/** MAM archive id — unique and chronologically sortable */
 	id: string;
@@ -17,6 +27,8 @@ export interface ChatMessage {
 	timestamp: string;
 	/** attached file — the body is the literal "media" for these messages */
 	media?: MessageMedia;
+	/** @-mentions of chat members inside the body */
+	mentions?: MessageMention[];
 }
 
 export interface RoomMessages {

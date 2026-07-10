@@ -5,7 +5,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import CreateChatDialog from '$lib/components/CreateChatDialog.svelte';
 	import ManageMembersDialog from '$lib/components/ManageMembersDialog.svelte';
-	import { getMyChats, deleteChat, type Chat } from '$lib/api/chats';
+	import { getMyChats, deleteChat, type Chat, type ChatMember } from '$lib/api/chats';
 	import { uploadFile } from '$lib/api/files';
 	import { openImageGallery } from '$lib/lightbox';
 	import { getApiErrorMessage } from '$lib/api/auth';
@@ -17,7 +17,8 @@
 		lastMessage,
 		clearMessages,
 		forgetRoom,
-		type ChatMessage
+		type ChatMessage,
+		type MessageMention
 	} from '$lib/state/messages.svelte';
 	import {
 		connectAndJoinRooms,
@@ -275,7 +276,8 @@
 
 	type BodyPart =
 		| { type: 'text'; value: string }
-		| { type: 'link'; value: string; href: string; internal: boolean };
+		| { type: 'link'; value: string; href: string; internal: boolean }
+		| { type: 'mention'; value: string; xmppUsername: string };
 
 	// split a message into text and link segments; links to this app's own
 	// origin become relative hrefs (handled by the SvelteKit router in-place),
@@ -319,25 +321,59 @@
 		return parts;
 	}
 
+	// slice the body into mention spans (by the stanza's reference ranges) and
+	// run the text in between through linkify
+	function bodyParts(message: ChatMessage): BodyPart[] {
+		const mentions = [...(message.mentions ?? [])]
+			.filter((m) => m.begin >= 0 && m.end <= message.body.length)
+			.sort((a, b) => a.begin - b.begin);
+		if (mentions.length === 0) return linkify(message.body);
+		const parts: BodyPart[] = [];
+		let cursor = 0;
+		for (const mention of mentions) {
+			if (mention.begin < cursor) continue; // overlapping range — ignore
+			if (mention.begin > cursor) {
+				parts.push(...linkify(message.body.slice(cursor, mention.begin)));
+			}
+			parts.push({
+				type: 'mention',
+				value: message.body.slice(mention.begin, mention.end),
+				xmppUsername: mention.xmppUsername
+			});
+			cursor = mention.end;
+		}
+		if (cursor < message.body.length) {
+			parts.push(...linkify(message.body.slice(cursor)));
+		}
+		return parts;
+	}
+
 	function formatTime(timestamp: string): string {
 		if (!timestamp) return '';
 		return new Date(timestamp).toLocaleString();
 	}
 
-	// the dialog created the chat; sync everything around it and open it
+	// the dialog created the chat; sync everything around it and open it —
+	// a failed sync step must not stop the chat from opening
 	async function onChatCreated(roomName: string) {
-		// refetch so the new chat has the canonical /chats/my shape
-		const chats = await getMyChats();
-		setChats(chats.items);
-
-		const xmppUsername = localStorage.getItem('xmppUsername');
-		const xmppPassword = localStorage.getItem('xmppPassword');
-		if (xmppUsername && xmppPassword) {
-			const roomNames = chatsState.items.map((chat) => chat.name);
-			await connectAndJoinRooms(xmppUsername, xmppPassword, roomNames);
-			await loadLastMessages(roomNames);
+		try {
+			// refetch so the new chat has the canonical /chats/my shape
+			const chats = await getMyChats();
+			setChats(chats.items);
+		} catch (err) {
+			console.error('chat list refetch after create failed:', err);
 		}
-
+		try {
+			const xmppUsername = localStorage.getItem('xmppUsername');
+			const xmppPassword = localStorage.getItem('xmppPassword');
+			if (xmppUsername && xmppPassword) {
+				const roomNames = chatsState.items.map((chat) => chat.name);
+				await connectAndJoinRooms(xmppUsername, xmppPassword, roomNames);
+				await loadLastMessages(roomNames);
+			}
+		} catch (err) {
+			console.error('XMPP sync after create failed:', err);
+		}
 		await selectChat(roomName);
 	}
 
@@ -462,14 +498,112 @@
 		return `${bytes} B`;
 	}
 
+	// --- @-mention autocomplete in the composer ---
+	// what the user actually picked from the dropdown; at send time each text
+	// still present in the message becomes a mention reference
+	let draftMentions = $state<{ xmppUsername: string; text: string }[]>([]);
+	/** text typed after the active "@" (may contain a space for last names);
+	 * null = no active mention token at the caret */
+	let mentionQuery = $state<string | null>(null);
+	let mentionTokenStart = 0;
+	let mentionIndex = $state(0);
+
+	const mentionCandidates = $derived.by(() => {
+		if (mentionQuery === null || !selectedChat) return [];
+		const query = mentionQuery.toLowerCase();
+		return selectedChat.members
+			.filter((m) => m.xmppUsername !== myNickname)
+			.filter((m) => `${m.firstName} ${m.lastName}`.toLowerCase().includes(query))
+			.slice(0, 8);
+	});
+
+	// find an "@token" ending at the caret; @ must start the text or follow
+	// whitespace so email-like strings don't trigger the dropdown
+	function updateMentionToken() {
+		const caret = composerEl?.selectionStart;
+		if (caret == null) {
+			mentionQuery = null;
+			return;
+		}
+		const upToCaret = draft.slice(0, caret);
+		const at = upToCaret.lastIndexOf('@');
+		if (at === -1 || (at > 0 && !/\s/.test(upToCaret[at - 1]))) {
+			mentionQuery = null;
+			return;
+		}
+		const token = upToCaret.slice(at + 1);
+		if (token.length > 40) {
+			mentionQuery = null;
+			return;
+		}
+		mentionTokenStart = at;
+		if (mentionQuery !== token) mentionIndex = 0;
+		mentionQuery = token;
+	}
+
+	async function pickMention(member: ChatMember) {
+		const text = `@${member.firstName} ${member.lastName}`.trim();
+		const caret = composerEl?.selectionStart ?? draft.length;
+		draft = draft.slice(0, mentionTokenStart) + text + ' ' + draft.slice(caret);
+		if (!draftMentions.some((m) => m.text === text && m.xmppUsername === member.xmppUsername)) {
+			draftMentions = [...draftMentions, { xmppUsername: member.xmppUsername, text }];
+		}
+		const position = mentionTokenStart + text.length + 1;
+		mentionQuery = null;
+		await tick(); // let the input take the new value before moving the caret
+		composerEl?.focus();
+		composerEl?.setSelectionRange(position, position);
+	}
+
+	function composerKeydown(event: KeyboardEvent) {
+		if (mentionQuery === null || mentionCandidates.length === 0) return;
+		if (event.key === 'ArrowDown') {
+			event.preventDefault();
+			mentionIndex = (mentionIndex + 1) % mentionCandidates.length;
+		} else if (event.key === 'ArrowUp') {
+			event.preventDefault();
+			mentionIndex = (mentionIndex - 1 + mentionCandidates.length) % mentionCandidates.length;
+		} else if (event.key === 'Enter' || event.key === 'Tab') {
+			// pick instead of submitting the form / leaving the field
+			event.preventDefault();
+			pickMention(mentionCandidates[mentionIndex]);
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			mentionQuery = null;
+		}
+	}
+
+	// every occurrence of a picked mention text in the final message becomes a
+	// reference; longer names first so "@Ann Lee Smith" wins over "@Ann Lee"
+	function collectMentions(text: string): MessageMention[] {
+		const found: MessageMention[] = [];
+		const ordered = [...draftMentions].sort((a, b) => b.text.length - a.text.length);
+		for (const mention of ordered) {
+			let searchFrom = 0;
+			for (;;) {
+				const begin = text.indexOf(mention.text, searchFrom);
+				if (begin === -1) break;
+				const end = begin + mention.text.length;
+				if (!found.some((m) => begin < m.end && end > m.begin)) {
+					found.push({ begin, end, xmppUsername: mention.xmppUsername });
+				}
+				searchFrom = end;
+			}
+		}
+		return found.sort((a, b) => a.begin - b.begin);
+	}
+
 	async function sendMessage() {
 		const text = draft.trim();
 		if (!text || !selectedRoom || sending) return;
 		sending = true;
 		sendError = '';
 		try {
-			await sendRoomMessage(selectedRoom, text);
+			const mentions = collectMentions(text);
+			await sendRoomMessage(selectedRoom, text, mentions.length > 0 ? mentions : undefined);
 			draft = '';
+			draftMentions = [];
+			mentionQuery = null;
 		} catch (err) {
 			console.error('send failed:', err);
 			sendError = 'Failed to send the message. Check the connection and try again.';
@@ -890,7 +1024,7 @@
 											{/if}
 										{:else}
 											<p class="text-sm whitespace-pre-wrap">
-												{#each linkify(message.body) as part, i (i)}
+												{#each bodyParts(message) as part, i (i)}
 													{#if part.type === 'link'}
 														<a
 															href={part.href}
@@ -900,6 +1034,14 @@
 																? 'text-white hover:text-indigo-100'
 																: 'text-indigo-600 hover:text-indigo-500'}"
 														>{part.value}</a>
+													{:else if part.type === 'mention'}
+														<span
+															class="rounded px-1 font-medium {part.xmppUsername === myNickname
+																? 'bg-amber-200 text-amber-900'
+																: mine
+																	? 'bg-indigo-500 text-white'
+																	: 'bg-indigo-100 text-indigo-700'}"
+														>{part.value}</span>
 													{:else}
 														{part.value}
 													{/if}
@@ -914,12 +1056,56 @@
 				</div>
 
 				<form
-					class="shrink-0 border-t border-gray-200 bg-white px-4 py-3 sm:px-6"
+					class="relative shrink-0 border-t border-gray-200 bg-white px-4 py-3 sm:px-6"
 					onsubmit={(event) => {
 						event.preventDefault();
 						sendMessage();
 					}}
 				>
+					{#if mentionQuery !== null && mentionCandidates.length > 0}
+						<!-- preventDefault on mousedown keeps the input focused so a
+						     click lands on the option instead of racing with blur -->
+						<div
+							role="listbox"
+							tabindex="-1"
+							onmousedown={(event) => event.preventDefault()}
+							class="absolute right-4 bottom-full left-4 z-30 mb-1 max-h-56 overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 sm:right-6 sm:left-6"
+						>
+							{#each mentionCandidates as member, i (member.xmppUsername)}
+								<button
+									type="button"
+									role="option"
+									aria-selected={i === mentionIndex}
+									onclick={() => pickMention(member)}
+									onmouseenter={() => (mentionIndex = i)}
+									class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm {i ===
+									mentionIndex
+										? 'bg-indigo-50'
+										: ''}"
+								>
+									{#if member.profileImage}
+										<img
+											src={member.profileImage}
+											alt=""
+											class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200"
+										/>
+									{:else}
+										<div
+											class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600"
+										>
+											{`${member.firstName} ${member.lastName}`.trim().charAt(0).toUpperCase()}
+										</div>
+									{/if}
+									<span class="min-w-0 flex-1 truncate text-gray-900">
+										{`${member.firstName} ${member.lastName}`.trim()}
+									</span>
+									{#if selectedRoom && xmppState.occupants[selectedRoom]?.includes(member.xmppUsername)}
+										<span class="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
+									{/if}
+								</button>
+							{/each}
+						</div>
+					{/if}
 					{#if sendError}
 						<p class="mb-2 text-xs text-red-600" role="alert">{sendError}</p>
 					{/if}
@@ -939,6 +1125,10 @@
 							type="text"
 							bind:this={composerEl}
 							bind:value={draft}
+							oninput={updateMentionToken}
+							onkeydown={composerKeydown}
+							onkeyup={updateMentionToken}
+							onclick={updateMentionToken}
 							placeholder={xmppState.status === 'online'
 								? 'Type a message…'
 								: 'Connecting…'}

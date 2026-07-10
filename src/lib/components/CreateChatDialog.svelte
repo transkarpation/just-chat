@@ -13,8 +13,9 @@
 		open?: boolean;
 		/** own xmppUsername — excluded from the member candidates */
 		myNickname: string;
-		/** called with the new room name after the chat is created; the dialog
-		 * stays open and shows the error if this throws */
+		/** called with the new room name after the chat is created; runs after
+		 * the dialog closes — a failure here is logged, not shown as a create
+		 * error, because the chat itself already exists */
 		oncreated: (roomName: string) => Promise<void> | void;
 	} = $props();
 
@@ -88,10 +89,11 @@
 		if (!canSubmit || creating) return;
 		creating = true;
 		createError = '';
+		let created;
 		try {
 			// /v1/chats/private is idempotent — an existing 1-1 chat with the
 			// same person is returned instead of creating a duplicate
-			const created =
+			created =
 				chatType === 'private'
 					? await createPrivateChat(selectedMembers[0])
 					: await createChat({
@@ -99,15 +101,24 @@
 							type: chatType,
 							members: selectedMembers
 						});
-			await oncreated(created.result.name);
-			title = '';
-			chatType = 'public';
-			selectedMembers = [];
-			open = false;
 		} catch (err) {
+			console.error('chat create failed:', err);
 			createError = getApiErrorMessage(err);
-		} finally {
 			creating = false;
+			return;
+		}
+		// the chat exists — close the dialog regardless of how the follow-up
+		// sync goes, otherwise a sync hiccup reads as a failed create and
+		// invites a duplicate retry
+		title = '';
+		chatType = 'public';
+		selectedMembers = [];
+		creating = false;
+		open = false;
+		try {
+			await oncreated(created.result.name);
+		} catch (err) {
+			console.error('post-create sync failed:', err);
 		}
 	}
 </script>
