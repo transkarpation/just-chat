@@ -99,7 +99,7 @@
 	<title>Profile</title>
 </svelte:head>
 
-<div class="min-h-screen bg-gray-50 dark:bg-gray-950">
+<div class="min-h-dvh bg-gray-50 dark:bg-gray-950">
 	<header class="border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
 		<div class="mx-auto flex max-w-2xl items-center justify-between px-4 py-4 sm:px-6">
 			<h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Profile</h1>

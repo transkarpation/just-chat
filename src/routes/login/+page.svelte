@@ -38,7 +38,9 @@
 	<title>Sign in</title>
 </svelte:head>
 
-<div class="relative flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12 dark:bg-gray-950">
+<!-- dvh, not vh: on mobile 100vh includes the collapsed URL bar and causes
+     a needless scroll even when the content fits the visible viewport -->
+<div class="relative flex min-h-dvh items-center justify-center bg-gray-50 px-4 py-12 dark:bg-gray-950">
 	<div class="absolute top-4 right-4">
 		<ThemeToggle />
 	</div>

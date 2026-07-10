@@ -702,7 +702,9 @@
 	<title>User page</title>
 </svelte:head>
 
-<div class="flex h-screen justify-center bg-gray-100 dark:bg-black">
+<!-- h-dvh, not h-screen: mobile 100vh overshoots the visible viewport and
+     hides the composer behind the browser chrome -->
+<div class="flex h-dvh justify-center bg-gray-100 dark:bg-black">
 	<!-- cap the app width on large screens; children keep their layout -->
 	<div class="flex h-full w-full max-w-6xl flex-col border-gray-200 bg-gray-50 xl:border-x dark:border-gray-800 dark:bg-gray-950">
 	<header class="shrink-0 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
