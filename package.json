@@ -3,6 +3,20 @@
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
+	"description": "Single-page chat client for the Ethora / Dappros Platform — SvelteKit 5 + XMPP (ejabberd) with MUC, MAM history, media, mentions and browser notifications",
+	"keywords": [
+		"chat",
+		"messenger",
+		"xmpp",
+		"ejabberd",
+		"muc",
+		"realtime",
+		"sveltekit",
+		"svelte5",
+		"ethora",
+		"dappros",
+		"tailwindcss"
+	],
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
