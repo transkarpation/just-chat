@@ -53,6 +53,11 @@
 	const selectedChat = $derived(
 		chatsState.items.find((chat) => chat.name === selectedRoom) ?? null
 	);
+	// a roomId in the URL means the message pane is "open" — on mobile the
+	// list and the conversation are two screens, and this picks which one
+	// shows (it also covers the joining-from-a-link state, when the room is
+	// not in chatsState yet)
+	const roomPaneOpen = $derived(page.url.searchParams.get('roomId') !== null);
 	// freshest conversation first; chats with no known messages sink to the
 	// bottom. Reacts to live messages too, so an active chat bubbles up.
 	const sortedChats = $derived(
@@ -722,8 +727,9 @@
 	{/if}
 
 	<div class="flex min-h-0 flex-1">
-		<!-- chat list -->
-		<aside class="flex w-80 shrink-0 flex-col border-r border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+		<!-- chat list: full-screen on mobile (hidden when a chat is open),
+		     fixed-width column next to the messages on md+ -->
+		<aside class="{roomPaneOpen ? 'hidden md:flex' : 'flex'} w-full shrink-0 flex-col border-r border-gray-200 bg-white md:w-80 dark:border-gray-800 dark:bg-gray-900">
 			<div class="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-gray-800">
 				<h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">My chats</h2>
 				<div class="flex items-center gap-2">
@@ -805,13 +811,21 @@
 			</div>
 		</aside>
 
-		<!-- message area -->
-		<section class="flex min-h-0 flex-1 flex-col">
+		<!-- message area: full-screen on mobile when a chat is open -->
+		<section class="{roomPaneOpen ? 'flex' : 'hidden md:flex'} min-h-0 flex-1 flex-col">
 			{#if selectedChat}
 				<div
-					class="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
+					class="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 bg-white px-4 py-3 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
 				>
-					<div class="relative min-w-0">
+					<button
+						type="button"
+						onclick={() => goto('/')}
+						aria-label="Back to chat list"
+						class="shrink-0 rounded-md px-2 py-1.5 text-lg leading-none text-gray-600 hover:bg-gray-100 md:hidden dark:text-gray-300 dark:hover:bg-gray-800"
+					>
+						←
+					</button>
+					<div class="relative min-w-0 flex-1">
 						<h3 class="truncate font-semibold text-gray-900 dark:text-gray-100">{chatTitle(selectedChat)}</h3>
 						<p class="text-xs text-gray-500 dark:text-gray-400">
 							{selectedChat.members.length}
@@ -852,7 +866,7 @@
 					<div class="flex shrink-0 items-center gap-2">
 						{#if selectedChat.createdBy && selectedChat.createdBy === myUserId}
 							<span
-								class="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
+								class="hidden rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700 sm:inline dark:bg-indigo-900 dark:text-indigo-300"
 							>
 								created by you
 							</span>
@@ -894,13 +908,13 @@
 						</button>
 						{#if xmppState.joinedRooms.includes(selectedChat.name)}
 							<span
-								class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-300"
+								class="hidden rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 sm:inline dark:bg-green-950 dark:text-green-300"
 							>
 								joined
 							</span>
 						{/if}
 						<span
-							class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+							class="hidden rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600 sm:inline dark:bg-gray-800 dark:text-gray-300"
 						>
 							{selectedChat.type}
 						</span>
@@ -1185,6 +1199,14 @@
 								Choose a conversation from the list to see its messages.
 							</p>
 						{/if}
+						<!-- on mobile this pane covers the list — offer a way back -->
+						<button
+							type="button"
+							onclick={() => goto('/')}
+							class="mt-4 text-sm font-medium text-indigo-600 hover:text-indigo-500 md:hidden dark:text-indigo-400 dark:hover:text-indigo-300"
+						>
+							← Back to chats
+						</button>
 					</div>
 				</div>
 			{/if}
