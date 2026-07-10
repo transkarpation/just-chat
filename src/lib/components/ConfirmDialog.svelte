@@ -22,21 +22,21 @@
 
 <AlertDialog.Root bind:open>
 	<AlertDialog.Portal>
-		<AlertDialog.Overlay class="fixed inset-0 z-40 bg-gray-900/40" />
+		<AlertDialog.Overlay class="fixed inset-0 z-40 bg-gray-900/40 dark:bg-black/60" />
 		<AlertDialog.Content
-			class="fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl bg-white p-6 shadow-xl"
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl bg-white p-6 shadow-xl dark:bg-gray-900 dark:ring-1 dark:ring-gray-800"
 		>
-			<AlertDialog.Title class="text-base font-semibold text-gray-900">
+			<AlertDialog.Title class="text-base font-semibold text-gray-900 dark:text-gray-100">
 				{title}
 			</AlertDialog.Title>
 			{#if description}
-				<AlertDialog.Description class="mt-2 text-sm text-gray-600">
+				<AlertDialog.Description class="mt-2 text-sm text-gray-600 dark:text-gray-400">
 					{description}
 				</AlertDialog.Description>
 			{/if}
 			<div class="mt-5 flex justify-end gap-2">
 				<AlertDialog.Cancel
-					class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+					class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800"
 				>
 					{cancelLabel}
 				</AlertDialog.Cancel>

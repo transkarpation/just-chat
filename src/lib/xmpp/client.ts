@@ -12,6 +12,7 @@ import {
 	ensureRoom,
 	prependMessages,
 	appendMessage,
+	confirmMessage,
 	removeMessage,
 	forgetRoom,
 	type ChatMessage,
@@ -35,7 +36,7 @@ const handledInvites = new Set<string>();
  * exactly — the server writes its own status texts in some cases (e.g.
  * "Replaced by new connection").
  */
-const LEAVE_STATUS = 'svelt-check:left-room';
+const LEAVE_STATUS = 'left-room';
 
 /**
  * Connect to the XMPP server and join the given MUC rooms.
@@ -146,7 +147,7 @@ export async function connectAndJoinRooms(
 		const body = stanza.getChildText('body');
 		if (!body) return;
 		const mentions = mentionsMeta(stanza);
-		appendMessage(room, {
+		const message: ChatMessage = {
 			id:
 				stanza.getChild('stanza-id', 'urn:xmpp:sid:0')?.attrs.id ??
 				`live-${stanza.attrs.id ?? crypto.randomUUID()}`,
@@ -156,7 +157,14 @@ export async function connectAndJoinRooms(
 			timestamp: new Date().toISOString(),
 			media: mediaMeta(stanza),
 			mentions
-		});
+		};
+		// the echo of an own send keeps the stanza id we set (verified live) —
+		// use it to turn the optimistic pending copy into the confirmed message
+		const sentId = String(stanza.attrs.id ?? '');
+		if (nick === currentUser && sentId.startsWith('local-') && confirmMessage(room, sentId, message)) {
+			return; // own echo — replaced the pending copy, no sounds for own sends
+		}
+		appendMessage(room, message);
 		// an audible ping for incoming messages (never for own sends): a loud
 		// chime when this user is mentioned; a quiet tick for other messages,
 		// but only when they can be missed — hidden tab or a different chat
@@ -466,8 +474,12 @@ async function acceptRoomInvite(roomName: string): Promise<void> {
 	}
 }
 
-/** Send a text message to a room. It appears in state via the MUC reflection.
- * Mentions (if any) are attached as XEP-0372 references — see mentionsMeta. */
+/**
+ * Send a text message to a room. The message goes into state immediately as
+ * a pending one; the MUC echo (which keeps the stanza id we set) confirms it —
+ * that's the "delivered to server" tick in the UI. A failed send removes the
+ * optimistic copy again. Mentions travel as XEP-0372 references.
+ */
 export async function sendRoomMessage(
 	roomName: string,
 	body: string,
@@ -476,22 +488,37 @@ export async function sendRoomMessage(
 	if (!xmpp || xmppState.status !== 'online') {
 		throw new Error('XMPP is not connected');
 	}
-	await xmpp.send(
-		xml(
-			'message',
-			{ type: 'groupchat', to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}` },
-			xml('body', {}, body),
-			...(mentions ?? []).map((mention) =>
-				xml('reference', {
-					xmlns: 'urn:xmpp:reference:0',
-					type: 'mention',
-					begin: String(mention.begin),
-					end: String(mention.end),
-					uri: `xmpp:${mention.xmppUsername}@${PUBLIC_XMPP_HOST}`
-				})
+	const localId = `local-${crypto.randomUUID()}`;
+	appendMessage(roomName, {
+		id: localId,
+		roomName,
+		nickname: currentUser,
+		body,
+		timestamp: new Date().toISOString(),
+		mentions,
+		pending: true
+	});
+	try {
+		await xmpp.send(
+			xml(
+				'message',
+				{ id: localId, type: 'groupchat', to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}` },
+				xml('body', {}, body),
+				...(mentions ?? []).map((mention) =>
+					xml('reference', {
+						xmlns: 'urn:xmpp:reference:0',
+						type: 'mention',
+						begin: String(mention.begin),
+						end: String(mention.end),
+						uri: `xmpp:${mention.xmppUsername}@${PUBLIC_XMPP_HOST}`
+					})
+				)
 			)
-		)
-	);
+		);
+	} catch (err) {
+		removeMessage(roomName, localId);
+		throw err;
+	}
 }
 
 /**

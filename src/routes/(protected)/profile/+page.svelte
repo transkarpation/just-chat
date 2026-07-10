@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { updateProfile } from '$lib/api/users';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 
 	let firstName = $state('');
 	let lastName = $state('');
@@ -98,38 +99,41 @@
 	<title>Profile</title>
 </svelte:head>
 
-<div class="min-h-screen bg-gray-50">
-	<header class="border-b border-gray-200 bg-white">
+<div class="min-h-screen bg-gray-50 dark:bg-gray-950">
+	<header class="border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
 		<div class="mx-auto flex max-w-2xl items-center justify-between px-4 py-4 sm:px-6">
-			<h1 class="text-lg font-semibold text-gray-900">Profile</h1>
-			<a href="/" class="text-sm font-medium text-indigo-600 hover:text-indigo-500">
-				← Back to chats
-			</a>
+			<h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Profile</h1>
+			<div class="flex items-center gap-4">
+				<ThemeToggle />
+				<a href="/" class="text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">
+					← Back to chats
+				</a>
+			</div>
 		</div>
 	</header>
 
 	<main class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
-		<div class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
+		<div class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-gray-800">
 			<div class="flex items-center gap-5">
 				{#if profileImage}
 					<img
 						src={profileImage}
 						alt="Profile"
-						class="h-24 w-24 shrink-0 rounded-full object-cover ring-1 ring-gray-200"
+						class="h-24 w-24 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
 					/>
 				{:else}
 					<div
-						class="flex h-24 w-24 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-3xl font-semibold text-indigo-700"
+						class="flex h-24 w-24 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-3xl font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
 					>
 						{(firstName || email).charAt(0).toUpperCase()}
 					</div>
 				{/if}
 
 				<div class="min-w-0">
-					<p class="truncate text-lg font-semibold text-gray-900">
+					<p class="truncate text-lg font-semibold text-gray-900 dark:text-gray-100">
 						{`${firstName} ${lastName}`.trim() || 'Unnamed user'}
 					</p>
-					<p class="truncate text-sm text-gray-500">{email}</p>
+					<p class="truncate text-sm text-gray-500 dark:text-gray-400">{email}</p>
 
 					<div class="mt-3 flex items-center gap-3">
 						<input
@@ -148,16 +152,16 @@
 							{uploading ? 'Uploading…' : profileImage ? 'Change photo' : 'Upload photo'}
 						</button>
 						{#if saved}
-							<span class="text-sm font-medium text-green-600">Saved ✓</span>
+							<span class="text-sm font-medium text-green-600 dark:text-green-400">Saved ✓</span>
 						{/if}
 					</div>
 				</div>
 			</div>
 
-			<form class="mt-6 border-t border-gray-100 pt-6" onsubmit={saveProfile}>
+			<form class="mt-6 border-t border-gray-100 pt-6 dark:border-gray-800" onsubmit={saveProfile}>
 				<div class="grid gap-4 sm:grid-cols-2">
 					<div>
-						<label for="firstName" class="block text-sm font-medium text-gray-700">
+						<label for="firstName" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
 							First name
 						</label>
 						<input
@@ -166,11 +170,11 @@
 							bind:value={firstName}
 							minlength="3"
 							maxlength="30"
-							class="mt-1.5 block w-full rounded-md border-0 px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600"
+							class="mt-1.5 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
 						/>
 					</div>
 					<div>
-						<label for="lastName" class="block text-sm font-medium text-gray-700">
+						<label for="lastName" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
 							Last name
 						</label>
 						<input
@@ -179,12 +183,12 @@
 							bind:value={lastName}
 							minlength="3"
 							maxlength="30"
-							class="mt-1.5 block w-full rounded-md border-0 px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600"
+							class="mt-1.5 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
 						/>
 					</div>
 				</div>
 				<div class="mt-4">
-					<label for="description" class="block text-sm font-medium text-gray-700">
+					<label for="description" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
 						About you
 					</label>
 					<textarea
@@ -193,17 +197,17 @@
 						rows="3"
 						maxlength="300"
 						placeholder="A short bio shown on your profile…"
-						class="mt-1.5 block w-full resize-y rounded-md border-0 px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset {descriptionValid
-							? 'ring-gray-300 focus:ring-indigo-600'
-							: 'ring-red-300 focus:ring-red-500'} placeholder:text-gray-400 focus:ring-2 focus:ring-inset"
+						class="mt-1.5 block w-full resize-y rounded-md border-0 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset dark:bg-gray-800 dark:text-gray-100 dark:placeholder:text-gray-500 {descriptionValid
+							? 'ring-gray-300 focus:ring-indigo-600 dark:ring-gray-700 dark:focus:ring-indigo-500'
+							: 'ring-red-300 focus:ring-red-500 dark:ring-red-900'} placeholder:text-gray-400 focus:ring-2 focus:ring-inset"
 					></textarea>
-					<p class="mt-1 text-xs {descriptionValid ? 'text-gray-400' : 'text-red-600'}">
+					<p class="mt-1 text-xs {descriptionValid ? 'text-gray-400 dark:text-gray-500' : 'text-red-600 dark:text-red-400'}">
 						{description.trim().length}/300 — 5 characters minimum, or leave empty to clear.
 					</p>
 				</div>
 
 				<div class="mt-4 flex items-center justify-between gap-4">
-					<p class="text-xs text-gray-500">Names must be 3–30 characters.</p>
+					<p class="text-xs text-gray-500 dark:text-gray-400">Names must be 3–30 characters.</p>
 					<button
 						type="submit"
 						disabled={savingName || !nameValid || !descriptionValid}
@@ -215,7 +219,7 @@
 			</form>
 
 			{#if error}
-				<p class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">{error}</p>
+				<p class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300" role="alert">{error}</p>
 			{/if}
 		</div>
 	</main>

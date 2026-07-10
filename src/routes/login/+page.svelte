@@ -4,6 +4,7 @@
 	import { loginWithEmail, persistSession, getApiErrorMessage } from '$lib/api/auth';
 	import { getMyChats } from '$lib/api/chats';
 	import { setChats } from '$lib/state/chats.svelte';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 
 	let email = $state('');
 	let password = $state('');
@@ -37,41 +38,44 @@
 	<title>Sign in</title>
 </svelte:head>
 
-<div class="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12">
+<div class="relative flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12 dark:bg-gray-950">
+	<div class="absolute top-4 right-4">
+		<ThemeToggle />
+	</div>
 	<div class="w-full max-w-md">
 		<div class="mb-8 text-center">
-			<h1 class="text-2xl font-bold tracking-tight text-gray-900">Sign in to your account</h1>
-			<p class="mt-2 text-sm text-gray-600">
+			<h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Sign in to your account</h1>
+			<p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
 				Don't have an account?
-				<a href="/register" class="font-medium text-indigo-600 hover:text-indigo-500">Sign up</a>
+				<a href="/register" class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">Sign up</a>
 			</p>
 		</div>
 
-		<div class="rounded-xl bg-white px-6 py-8 shadow-sm ring-1 ring-gray-200 sm:px-8">
+		<div class="rounded-xl bg-white px-6 py-8 shadow-sm ring-1 ring-gray-200 sm:px-8 dark:bg-gray-900 dark:ring-gray-800">
 			<form class="space-y-6" onsubmit={handleSubmit}>
 				{#if error}
-					<div class="rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">
+					<div class="rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300" role="alert">
 						{error}
 					</div>
 				{/if}
 
 				<div>
-					<label for="email" class="block text-sm font-medium text-gray-700">Email address</label>
+					<label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Email address</label>
 					<input
 						id="email"
 						type="email"
 						autocomplete="email"
 						required
 						bind:value={email}
-						class="mt-1.5 block w-full rounded-md border-0 px-3 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm"
+						class="mt-1.5 block w-full rounded-md border-0 bg-white px-3 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
 						placeholder="you@example.com"
 					/>
 				</div>
 
 				<div>
 					<div class="flex items-center justify-between">
-						<label for="password" class="block text-sm font-medium text-gray-700">Password</label>
-						<a href="/forgot-password" class="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+						<label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Password</label>
+						<a href="/forgot-password" class="text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">
 							Forgot password?
 						</a>
 					</div>
@@ -81,7 +85,7 @@
 						autocomplete="current-password"
 						required
 						bind:value={password}
-						class="mt-1.5 block w-full rounded-md border-0 px-3 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm"
+						class="mt-1.5 block w-full rounded-md border-0 bg-white px-3 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
 						placeholder="••••••••"
 					/>
 				</div>
@@ -91,9 +95,9 @@
 						id="remember"
 						type="checkbox"
 						bind:checked={remember}
-						class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600"
+						class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-gray-600 dark:bg-gray-800"
 					/>
-					<label for="remember" class="text-sm text-gray-700">Remember me</label>
+					<label for="remember" class="text-sm text-gray-700 dark:text-gray-300">Remember me</label>
 				</div>
 
 				<button

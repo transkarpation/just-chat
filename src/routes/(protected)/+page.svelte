@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import CreateChatDialog from '$lib/components/CreateChatDialog.svelte';
 	import ManageMembersDialog from '$lib/components/ManageMembersDialog.svelte';
 	import { getMyChats, deleteChat, type Chat, type ChatMember } from '$lib/api/chats';
@@ -474,6 +475,7 @@
 	let confirmDeleteMessageOpen = $state(false);
 
 	function askDeleteMessage(message: ChatMessage) {
+		if (message.pending) return; // no archive id yet — nothing to delete
 		messageToDelete = message;
 		confirmDeleteMessageOpen = true;
 	}
@@ -641,22 +643,22 @@
 	<title>User page</title>
 </svelte:head>
 
-<div class="flex h-screen flex-col bg-gray-50">
-	<header class="shrink-0 border-b border-gray-200 bg-white">
+<div class="flex h-screen flex-col bg-gray-50 dark:bg-gray-950">
+	<header class="shrink-0 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
 		<div class="flex items-center justify-between px-4 py-3 sm:px-6">
-			<h1 class="text-lg font-semibold text-gray-900">User page</h1>
+			<h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">User page</h1>
 			<div class="flex items-center gap-4">
-				<span class="flex items-center gap-1.5 text-sm text-gray-500">
+				<span class="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400">
 					<span
 						class="h-2 w-2 rounded-full {xmppState.status === 'online'
 							? 'bg-green-500'
-							: 'bg-gray-300'}"
+							: 'bg-gray-300 dark:bg-gray-600'}"
 					></span>
 					XMPP {xmppState.status}
 				</span>
 				<a
 					href="/profile"
-					class="text-sm font-medium text-gray-700 hover:text-indigo-600"
+					class="text-sm font-medium text-gray-700 hover:text-indigo-600 dark:text-gray-300 dark:hover:text-indigo-400"
 					title="Open profile"
 				>
 					{#if userEmail}
@@ -666,10 +668,11 @@
 						Profile
 					{/if}
 				</a>
+				<ThemeToggle />
 				<button
 					type="button"
 					onclick={logout}
-					class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+					class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800"
 				>
 					Log out
 				</button>
@@ -678,8 +681,8 @@
 	</header>
 
 	{#if !notifBannerDismissed && notifPermission === 'default'}
-		<div class="flex shrink-0 items-center justify-between gap-4 border-b border-indigo-100 bg-indigo-50 px-4 py-2.5 sm:px-6">
-			<p class="text-sm text-indigo-900">
+		<div class="flex shrink-0 items-center justify-between gap-4 border-b border-indigo-100 bg-indigo-50 px-4 py-2.5 sm:px-6 dark:border-indigo-900 dark:bg-indigo-950">
+			<p class="text-sm text-indigo-900 dark:text-indigo-200">
 				Enable browser notifications to know when new messages arrive.
 			</p>
 			<div class="flex shrink-0 items-center gap-2">
@@ -694,15 +697,15 @@
 					type="button"
 					onclick={() => (notifBannerDismissed = true)}
 					aria-label="Dismiss"
-					class="rounded-md px-2 py-1 text-sm text-indigo-400 hover:bg-indigo-100 hover:text-indigo-600"
+					class="rounded-md px-2 py-1 text-sm text-indigo-400 hover:bg-indigo-100 hover:text-indigo-600 dark:hover:bg-indigo-900 dark:hover:text-indigo-300"
 				>
 					✕
 				</button>
 			</div>
 		</div>
 	{:else if !notifBannerDismissed && notifPermission === 'denied'}
-		<div class="flex shrink-0 items-center justify-between gap-4 border-b border-amber-200 bg-amber-50 px-4 py-2.5 sm:px-6">
-			<p class="text-sm text-amber-900">
+		<div class="flex shrink-0 items-center justify-between gap-4 border-b border-amber-200 bg-amber-50 px-4 py-2.5 sm:px-6 dark:border-amber-900 dark:bg-amber-950">
+			<p class="text-sm text-amber-900 dark:text-amber-200">
 				Notifications are blocked for this site. You won't be alerted about new messages —
 				to change this, allow notifications in your browser's site settings (the icon next
 				to the address bar).
@@ -711,7 +714,7 @@
 				type="button"
 				onclick={() => (notifBannerDismissed = true)}
 				aria-label="Dismiss"
-				class="shrink-0 rounded-md px-2 py-1 text-sm text-amber-500 hover:bg-amber-100 hover:text-amber-700"
+				class="shrink-0 rounded-md px-2 py-1 text-sm text-amber-500 hover:bg-amber-100 hover:text-amber-700 dark:hover:bg-amber-900 dark:hover:text-amber-300"
 			>
 				✕
 			</button>
@@ -720,12 +723,12 @@
 
 	<div class="flex min-h-0 flex-1">
 		<!-- chat list -->
-		<aside class="flex w-80 shrink-0 flex-col border-r border-gray-200 bg-white">
-			<div class="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-				<h2 class="text-sm font-semibold text-gray-900">My chats</h2>
+		<aside class="flex w-80 shrink-0 flex-col border-r border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+			<div class="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+				<h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">My chats</h2>
 				<div class="flex items-center gap-2">
 					{#if chatsState.loaded}
-						<span class="text-xs text-gray-500">{chatsState.items.length} total</span>
+						<span class="text-xs text-gray-500 dark:text-gray-400">{chatsState.items.length} total</span>
 					{/if}
 					<button
 						type="button"
@@ -739,13 +742,13 @@
 
 			<div class="min-h-0 flex-1 overflow-y-auto">
 				{#if loading}
-					<p class="p-4 text-sm text-gray-500">Loading chats…</p>
+					<p class="p-4 text-sm text-gray-500 dark:text-gray-400">Loading chats…</p>
 				{:else if error}
-					<p class="p-4 text-sm text-red-700" role="alert">{error}</p>
+					<p class="p-4 text-sm text-red-700 dark:text-red-400" role="alert">{error}</p>
 				{:else if chatsState.items.length === 0}
-					<p class="p-4 text-sm text-gray-500">You have no chats yet.</p>
+					<p class="p-4 text-sm text-gray-500 dark:text-gray-400">You have no chats yet.</p>
 				{:else}
-					<ul class="divide-y divide-gray-100">
+					<ul class="divide-y divide-gray-100 dark:divide-gray-800">
 						{#each sortedChats as chat (chat._id)}
 							{@const last = lastMessage(chat.name)}
 							{@const selected = selectedRoom === chat.name}
@@ -754,8 +757,8 @@
 									type="button"
 									onclick={() => selectChat(chat.name)}
 									class="flex w-full items-center gap-3 px-4 py-3 text-left {selected
-										? 'bg-indigo-50'
-										: 'hover:bg-gray-50'}"
+										? 'bg-indigo-50 dark:bg-indigo-950'
+										: 'hover:bg-gray-50 dark:hover:bg-gray-800'}"
 								>
 									{#if chat.picture}
 										<img
@@ -765,7 +768,7 @@
 										/>
 									{:else}
 										<div
-											class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700"
+											class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
 										>
 											{chatTitle(chat).charAt(0).toUpperCase()}
 										</div>
@@ -773,10 +776,10 @@
 
 									<div class="min-w-0 flex-1">
 										<div class="flex items-center gap-1.5">
-											<p class="truncate text-sm font-medium text-gray-900">{chatTitle(chat)}</p>
+											<p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{chatTitle(chat)}</p>
 											{#if chat.createdBy && chat.createdBy === myUserId}
 												<span
-													class="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700"
+													class="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
 												>
 													yours
 												</span>
@@ -786,12 +789,12 @@
 											{/if}
 										</div>
 										{#if last}
-											<p class="truncate text-xs text-gray-500">
+											<p class="truncate text-xs text-gray-500 dark:text-gray-400">
 												<span class="font-medium">{senderName(chat, last)}:</span>
 												{last.media ? `📎 ${last.media.originalName || 'file'}` : last.body}
 											</p>
 										{:else if chat.description}
-											<p class="truncate text-xs text-gray-500">{chat.description}</p>
+											<p class="truncate text-xs text-gray-500 dark:text-gray-400">{chat.description}</p>
 										{/if}
 									</div>
 								</button>
@@ -806,18 +809,18 @@
 		<section class="flex min-h-0 flex-1 flex-col">
 			{#if selectedChat}
 				<div
-					class="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6"
+					class="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
 				>
 					<div class="relative min-w-0">
-						<h3 class="truncate font-semibold text-gray-900">{chatTitle(selectedChat)}</h3>
-						<p class="text-xs text-gray-500">
+						<h3 class="truncate font-semibold text-gray-900 dark:text-gray-100">{chatTitle(selectedChat)}</h3>
+						<p class="text-xs text-gray-500 dark:text-gray-400">
 							{selectedChat.members.length}
 							{selectedChat.members.length === 1 ? 'member' : 'members'}
 							<span class="mx-1">·</span>
 							<button
 								type="button"
 								onclick={() => (showOnlineList = !showOnlineList)}
-								class="font-medium text-green-600 underline-offset-2 hover:underline"
+								class="font-medium text-green-600 underline-offset-2 hover:underline dark:text-green-400"
 								aria-expanded={showOnlineList}
 							>
 								{xmppState.occupants[selectedChat.name]?.length ?? 0} online
@@ -833,15 +836,15 @@
 								onclick={() => (showOnlineList = false)}
 							></button>
 							<div
-								class="absolute top-full left-0 z-20 mt-1 max-h-64 w-64 overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200"
+								class="absolute top-full left-0 z-20 mt-1 max-h-64 w-64 overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700"
 							>
 								{#each xmppState.occupants[selectedChat.name] ?? [] as nickname (nickname)}
-									<div class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-800">
+									<div class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200">
 										<span class="h-2 w-2 shrink-0 rounded-full bg-green-500"></span>
 										<span class="truncate">{nickToName(selectedChat, nickname)}</span>
 									</div>
 								{:else}
-									<p class="px-3 py-2 text-sm text-gray-500">Nobody is online.</p>
+									<p class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Nobody is online.</p>
 								{/each}
 							</div>
 						{/if}
@@ -849,7 +852,7 @@
 					<div class="flex shrink-0 items-center gap-2">
 						{#if selectedChat.createdBy && selectedChat.createdBy === myUserId}
 							<span
-								class="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700"
+								class="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
 							>
 								created by you
 							</span>
@@ -857,7 +860,7 @@
 								<button
 									type="button"
 									onclick={() => (showMembers = true)}
-									class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+									class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800"
 								>
 									Members
 								</button>
@@ -866,7 +869,7 @@
 								type="button"
 								onclick={() => (confirmDeleteOpen = true)}
 								disabled={deletingChat}
-								class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50 disabled:opacity-50"
+								class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50 disabled:opacity-50 dark:bg-gray-900 dark:text-red-400 dark:ring-red-900 dark:hover:bg-red-950"
 							>
 								{deletingChat ? 'Deleting…' : 'Delete'}
 							</button>
@@ -875,7 +878,7 @@
 								type="button"
 								onclick={() => (confirmLeaveOpen = true)}
 								disabled={leavingChat || xmppState.status !== 'online'}
-								class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50 disabled:opacity-50"
+								class="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-600 ring-1 ring-inset ring-red-200 hover:bg-red-50 disabled:opacity-50 dark:bg-gray-900 dark:text-red-400 dark:ring-red-900 dark:hover:bg-red-950"
 							>
 								{leavingChat ? 'Leaving…' : 'Leave'}
 							</button>
@@ -883,21 +886,21 @@
 						<button
 							type="button"
 							onclick={copyRoomLink}
-							class="rounded-md bg-white px-2.5 py-1 text-xs font-medium {linkCopied
-								? 'text-green-600 ring-green-300'
-								: 'text-gray-700 ring-gray-300 hover:bg-gray-50'} ring-1 ring-inset"
+							class="rounded-md bg-white px-2.5 py-1 text-xs font-medium dark:bg-gray-900 {linkCopied
+								? 'text-green-600 ring-green-300 dark:text-green-400 dark:ring-green-800'
+								: 'text-gray-700 ring-gray-300 hover:bg-gray-50 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800'} ring-1 ring-inset"
 						>
 							{linkCopied ? 'Copied!' : 'Copy link'}
 						</button>
 						{#if xmppState.joinedRooms.includes(selectedChat.name)}
 							<span
-								class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700"
+								class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-300"
 							>
 								joined
 							</span>
 						{/if}
 						<span
-							class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600"
+							class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300"
 						>
 							{selectedChat.type}
 						</span>
@@ -905,7 +908,7 @@
 				</div>
 
 				{#if deleteError}
-					<div class="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 sm:px-6" role="alert">
+					<div class="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 sm:px-6 dark:border-red-900 dark:bg-red-950 dark:text-red-300" role="alert">
 						{deleteError}
 					</div>
 				{/if}
@@ -917,7 +920,7 @@
 								type="button"
 								onclick={() => selectedRoom && loadOlderMessages(selectedRoom, 20)}
 								disabled={selectedMessages.loading}
-								class="rounded-md bg-white px-3 py-1 text-xs font-medium text-indigo-600 ring-1 ring-inset ring-gray-200 hover:bg-indigo-50 disabled:opacity-50"
+								class="rounded-md bg-white px-3 py-1 text-xs font-medium text-indigo-600 ring-1 ring-inset ring-gray-200 hover:bg-indigo-50 disabled:opacity-50 dark:bg-gray-900 dark:text-indigo-400 dark:ring-gray-700 dark:hover:bg-gray-800"
 							>
 								{selectedMessages.loading ? 'Loading…' : 'Load older messages'}
 							</button>
@@ -925,7 +928,7 @@
 					{/if}
 
 					{#if !selectedMessages || selectedMessages.messages.length === 0}
-						<p class="py-10 text-center text-sm text-gray-500">
+						<p class="py-10 text-center text-sm text-gray-500 dark:text-gray-400">
 							{selectedMessages?.loading ? 'Loading messages…' : 'No messages in this chat yet.'}
 						</p>
 					{:else}
@@ -934,13 +937,13 @@
 								{@const mine = message.nickname === myNickname}
 								{@const avatar = senderAvatar(selectedChat, message)}
 								<li class="group flex items-end gap-2 {mine ? 'justify-end' : 'justify-start'}">
-									{#if mine}
+									{#if mine && !message.pending}
 										<button
 											type="button"
 											onclick={() => askDeleteMessage(message)}
 											aria-label="Delete message"
 											title="Delete message"
-											class="self-center rounded-md p-1 text-sm text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-gray-200 hover:text-red-600 focus-visible:opacity-100"
+											class="self-center rounded-md p-1 text-sm text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-gray-200 hover:text-red-600 focus-visible:opacity-100 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-red-400"
 										>
 											🗑
 										</button>
@@ -950,28 +953,31 @@
 											<img
 												src={avatar}
 												alt=""
-												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200"
+												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
 											/>
 										{:else}
 											<div
-												class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600"
+												class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
 											>
 												{senderName(selectedChat, message).charAt(0).toUpperCase()}
 											</div>
 										{/if}
 									{/if}
+									<div class="flex max-w-[75%] flex-col {mine ? 'items-end' : 'items-start'}">
 									<div
-										class="max-w-[75%] rounded-2xl px-4 py-2 {mine
+										class="rounded-2xl px-4 py-2 {mine
 											? 'rounded-br-sm bg-indigo-600 text-white'
-											: 'rounded-bl-sm bg-white text-gray-900 ring-1 ring-gray-200'}"
+											: 'rounded-bl-sm bg-white text-gray-900 ring-1 ring-gray-200 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700'}"
 									>
 										<div class="flex items-baseline gap-2">
 											<span
-												class="text-xs font-semibold {mine ? 'text-indigo-100' : 'text-indigo-600'}"
+												class="text-xs font-semibold {mine
+													? 'text-indigo-100'
+													: 'text-indigo-600 dark:text-indigo-400'}"
 											>
 												{senderName(selectedChat, message)}
 											</span>
-											<span class="text-[10px] {mine ? 'text-indigo-200' : 'text-gray-400'}">
+											<span class="text-[10px] {mine ? 'text-indigo-200' : 'text-gray-400 dark:text-gray-500'}">
 												{formatTime(message.timestamp)}
 											</span>
 										</div>
@@ -1009,14 +1015,14 @@
 													rel="noopener noreferrer"
 													class="mt-1 flex items-center gap-2 rounded-lg px-3 py-2 {mine
 														? 'bg-indigo-500/60 hover:bg-indigo-500'
-														: 'bg-gray-100 hover:bg-gray-200'}"
+														: 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600'}"
 												>
 													<span class="text-lg">📎</span>
 													<span class="min-w-0">
 														<span class="block truncate text-sm font-medium">
 															{message.media.originalName || 'file'}
 														</span>
-														<span class="block text-xs {mine ? 'text-indigo-200' : 'text-gray-500'}">
+														<span class="block text-xs {mine ? 'text-indigo-200' : 'text-gray-500 dark:text-gray-400'}">
 															{formatSize(message.media.size)}
 														</span>
 													</span>
@@ -1032,15 +1038,15 @@
 															rel={part.internal ? undefined : 'noopener noreferrer'}
 															class="font-medium underline underline-offset-2 {mine
 																? 'text-white hover:text-indigo-100'
-																: 'text-indigo-600 hover:text-indigo-500'}"
+																: 'text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300'}"
 														>{part.value}</a>
 													{:else if part.type === 'mention'}
 														<span
 															class="rounded px-1 font-medium {part.xmppUsername === myNickname
-																? 'bg-amber-200 text-amber-900'
+																? 'bg-amber-200 text-amber-900 dark:bg-amber-400/30 dark:text-amber-200'
 																: mine
 																	? 'bg-indigo-500 text-white'
-																	: 'bg-indigo-100 text-indigo-700'}"
+																	: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300'}"
 														>{part.value}</span>
 													{:else}
 														{part.value}
@@ -1049,6 +1055,18 @@
 											</p>
 										{/if}
 									</div>
+									{#if mine}
+										<!-- delivery status: the tick appears when the server echoed
+										     the message back (= it reached the server's archive) -->
+										<span
+											class="mt-0.5 text-sm leading-none text-gray-400 dark:text-gray-500"
+											title={message.pending ? 'Sending…' : 'Delivered to server'}
+											aria-label={message.pending ? 'Sending' : 'Delivered to server'}
+										>
+											{message.pending ? '…' : '✓'}
+										</span>
+									{/if}
+									</div>
 								</li>
 							{/each}
 						</ul>
@@ -1056,7 +1074,7 @@
 				</div>
 
 				<form
-					class="relative shrink-0 border-t border-gray-200 bg-white px-4 py-3 sm:px-6"
+					class="relative shrink-0 border-t border-gray-200 bg-white px-4 py-3 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
 					onsubmit={(event) => {
 						event.preventDefault();
 						sendMessage();
@@ -1069,7 +1087,7 @@
 							role="listbox"
 							tabindex="-1"
 							onmousedown={(event) => event.preventDefault()}
-							class="absolute right-4 bottom-full left-4 z-30 mb-1 max-h-56 overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 sm:right-6 sm:left-6"
+							class="absolute right-4 bottom-full left-4 z-30 mb-1 max-h-56 overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 sm:right-6 sm:left-6 dark:bg-gray-800 dark:ring-gray-700"
 						>
 							{#each mentionCandidates as member, i (member.xmppUsername)}
 								<button
@@ -1080,23 +1098,23 @@
 									onmouseenter={() => (mentionIndex = i)}
 									class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm {i ===
 									mentionIndex
-										? 'bg-indigo-50'
+										? 'bg-indigo-50 dark:bg-indigo-950'
 										: ''}"
 								>
 									{#if member.profileImage}
 										<img
 											src={member.profileImage}
 											alt=""
-											class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200"
+											class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
 										/>
 									{:else}
 										<div
-											class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600"
+											class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
 										>
 											{`${member.firstName} ${member.lastName}`.trim().charAt(0).toUpperCase()}
 										</div>
 									{/if}
-									<span class="min-w-0 flex-1 truncate text-gray-900">
+									<span class="min-w-0 flex-1 truncate text-gray-900 dark:text-gray-100">
 										{`${member.firstName} ${member.lastName}`.trim()}
 									</span>
 									{#if selectedRoom && xmppState.occupants[selectedRoom]?.includes(member.xmppUsername)}
@@ -1107,7 +1125,7 @@
 						</div>
 					{/if}
 					{#if sendError}
-						<p class="mb-2 text-xs text-red-600" role="alert">{sendError}</p>
+						<p class="mb-2 text-xs text-red-600 dark:text-red-400" role="alert">{sendError}</p>
 					{/if}
 					<div class="flex gap-2">
 						<input type="file" class="hidden" bind:this={mediaInputEl} onchange={sendMedia} />
@@ -1117,7 +1135,7 @@
 							disabled={sendingMedia || xmppState.status !== 'online'}
 							title="Attach a file"
 							aria-label="Attach a file"
-							class="shrink-0 rounded-md bg-white px-3 py-2 text-sm text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+							class="shrink-0 rounded-md bg-white px-3 py-2 text-sm text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800"
 						>
 							{sendingMedia ? '…' : '📎'}
 						</button>
@@ -1133,7 +1151,7 @@
 								? 'Type a message…'
 								: 'Connecting…'}
 							disabled={xmppState.status !== 'online'}
-							class="block w-full rounded-md border-0 px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50"
+							class="block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500 dark:disabled:bg-gray-800/50"
 						/>
 						<button
 							type="submit"
@@ -1148,12 +1166,12 @@
 				<div class="flex flex-1 items-center justify-center">
 					<div class="text-center">
 						{#if joiningRoom}
-							<p class="text-lg font-medium text-gray-900">Joining room…</p>
-							<p class="mt-1 text-sm text-gray-500">
+							<p class="text-lg font-medium text-gray-900 dark:text-gray-100">Joining room…</p>
+							<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
 								Adding you as a member. This can take a few seconds.
 							</p>
 						{:else if joinError}
-							<p class="text-lg font-medium text-red-700">{joinError}</p>
+							<p class="text-lg font-medium text-red-700 dark:text-red-400">{joinError}</p>
 							<button
 								type="button"
 								onclick={retryJoin}
@@ -1162,8 +1180,8 @@
 								Try again
 							</button>
 						{:else}
-							<p class="text-lg font-medium text-gray-900">Select a chat</p>
-							<p class="mt-1 text-sm text-gray-500">
+							<p class="text-lg font-medium text-gray-900 dark:text-gray-100">Select a chat</p>
+							<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
 								Choose a conversation from the list to see its messages.
 							</p>
 						{/if}

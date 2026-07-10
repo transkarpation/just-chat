@@ -29,6 +29,9 @@ export interface ChatMessage {
 	media?: MessageMedia;
 	/** @-mentions of chat members inside the body */
 	mentions?: MessageMention[];
+	/** own message shown optimistically, before the server echoed it back;
+	 * `id` is a local placeholder, not an archive id */
+	pending?: boolean;
 }
 
 export interface RoomMessages {
@@ -78,6 +81,30 @@ export function appendMessage(roomName: string, message: ChatMessage): void {
 	const room = ensureRoom(roomName);
 	if (room.messages.some((m) => m.id === message.id)) return;
 	room.messages = [...room.messages, message];
+}
+
+/**
+ * Replace an optimistic pending message with its server-confirmed version
+ * (the MUC echo carries the same stanza id we sent). Returns false when no
+ * pending message with that id exists — e.g. the send happened in another
+ * session — so the caller appends the echo as a regular message instead.
+ */
+export function confirmMessage(
+	roomName: string,
+	localId: string,
+	confirmed: ChatMessage
+): boolean {
+	const room = messagesState.rooms[roomName];
+	if (!room) return false;
+	const index = room.messages.findIndex((m) => m.pending && m.id === localId);
+	if (index === -1) return false;
+	if (room.messages.some((m) => m.id === confirmed.id)) {
+		// the confirmed copy is already in state — just drop the pending one
+		room.messages = room.messages.filter((m) => m.id !== localId);
+		return true;
+	}
+	room.messages = room.messages.map((m, i) => (i === index ? confirmed : m));
+	return true;
 }
 
 /** Drop a message that was deleted in the room. */

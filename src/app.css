@@ -1,1 +1,14 @@
 @import 'tailwindcss';
+
+/* dark mode is driven by the `dark` class on <html> (user toggle persisted
+   in localStorage, system preference as the default) instead of the media
+   query Tailwind uses out of the box */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* make native widgets (scrollbars, form controls, date pickers) follow */
+html {
+	color-scheme: light;
+}
+html.dark {
+	color-scheme: dark;
+}

@@ -94,6 +94,6 @@ for interop with official Ethora clients:
   the room reflects it to everyone and MAM keeps a tombstone.
 - **Mentions** = XEP-0372 `<reference type="mention" begin end uri="xmpp:…"/>`
   elements; they survive both live reflection and the MAM archive.
-- **Voluntary leave** is signalled with `<status>svelt-check:left-room</status>`
+- **Voluntary leave** is signalled with `<status>left-room</status>`
   inside the unavailable presence — on the wire a plain leave is otherwise
   indistinguishable from a connection drop.
