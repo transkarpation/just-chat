@@ -936,7 +936,9 @@
 		</aside>
 
 		<!-- message area: full-screen on mobile when a chat is open -->
-		<section class="{roomPaneOpen ? 'flex' : 'hidden md:flex'} min-h-0 flex-1 flex-col">
+		<!-- min-w-0: without it the pane refuses to shrink below the chat
+		     header's intrinsic width and overflows narrow screens -->
+		<section class="{roomPaneOpen ? 'flex' : 'hidden md:flex'} min-h-0 min-w-0 flex-1 flex-col">
 			{#if selectedChat}
 				<div
 					class="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 bg-white px-4 py-3 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
