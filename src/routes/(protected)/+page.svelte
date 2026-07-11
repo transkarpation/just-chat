@@ -1186,10 +1186,11 @@
 											</div>
 										{/if}
 									{/if}
-									<!-- max-w-full on the bubble is what makes the fixed 400px media
-									     block shrink on narrow screens: each level caps the next, so
-									     the block ends up at min(400px, what the bubble may take) -->
-									<div class="flex max-w-[85%] flex-col md:max-w-[75%] {mine ? 'items-end' : 'items-start'}">
+									<!-- min-w-0 lets this flex item shrink below the 400px media
+									     block's intrinsic width (flex items refuse to otherwise, which
+									     caused horizontal scroll on phones); the max-w chain then caps
+									     each level, so the block gets min(400px, available width) -->
+									<div class="flex min-w-0 max-w-[85%] flex-col md:max-w-[75%] {mine ? 'items-end' : 'items-start'}">
 									<div
 										class="max-w-full rounded-2xl px-4 py-2 {mine
 											? 'rounded-br-sm bg-indigo-600 text-white'
