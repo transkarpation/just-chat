@@ -1186,9 +1186,12 @@
 											</div>
 										{/if}
 									{/if}
-									<div class="flex max-w-[75%] flex-col {mine ? 'items-end' : 'items-start'}">
+									<!-- max-w-full on the bubble is what makes the fixed 400px media
+									     block shrink on narrow screens: each level caps the next, so
+									     the block ends up at min(400px, what the bubble may take) -->
+									<div class="flex max-w-[85%] flex-col md:max-w-[75%] {mine ? 'items-end' : 'items-start'}">
 									<div
-										class="rounded-2xl px-4 py-2 {mine
+										class="max-w-full rounded-2xl px-4 py-2 {mine
 											? 'rounded-br-sm bg-indigo-600 text-white'
 											: 'rounded-bl-sm bg-white text-gray-900 ring-1 ring-gray-200 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700'}"
 									>
