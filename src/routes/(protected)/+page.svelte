@@ -7,7 +7,7 @@
 	import CreateChatDialog from '$lib/components/CreateChatDialog.svelte';
 	import ManageMembersDialog from '$lib/components/ManageMembersDialog.svelte';
 	import { getMyChats, deleteChat, type Chat, type ChatMember } from '$lib/api/chats';
-	import { uploadFile } from '$lib/api/files';
+	import { uploadFile, type UploadedFile } from '$lib/api/files';
 	import { openImageGallery } from '$lib/lightbox';
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { chatsState, setChats, clearChats } from '$lib/state/chats.svelte';
@@ -20,6 +20,7 @@
 		forgetRoom,
 		compareArchiveIds,
 		type ChatMessage,
+		type MessageMedia,
 		type MessageMention,
 		type RoomMessages
 	} from '$lib/state/messages.svelte';
@@ -413,28 +414,37 @@
 		return new Date(timestamp).toLocaleString();
 	}
 
+	// the create dialog closes before the new chat is in chatsState — the
+	// overlay spinner covers that gap so the UI doesn't look idle
+	let syncingNewChat = $state(false);
+
 	// the dialog created the chat; sync everything around it and open it —
 	// a failed sync step must not stop the chat from opening
 	async function onChatCreated(roomName: string) {
+		syncingNewChat = true;
 		try {
-			// refetch so the new chat has the canonical /chats/my shape
-			const chats = await getMyChats();
-			setChats(chats.items);
-		} catch (err) {
-			console.error('chat list refetch after create failed:', err);
-		}
-		try {
-			const xmppUsername = localStorage.getItem('xmppUsername');
-			const xmppPassword = localStorage.getItem('xmppPassword');
-			if (xmppUsername && xmppPassword) {
-				const roomNames = chatsState.items.map((chat) => chat.name);
-				await connectAndJoinRooms(xmppUsername, xmppPassword, roomNames);
-				await loadLastMessages(roomNames);
+			try {
+				// refetch so the new chat has the canonical /chats/my shape
+				const chats = await getMyChats();
+				setChats(chats.items);
+			} catch (err) {
+				console.error('chat list refetch after create failed:', err);
 			}
-		} catch (err) {
-			console.error('XMPP sync after create failed:', err);
+			try {
+				const xmppUsername = localStorage.getItem('xmppUsername');
+				const xmppPassword = localStorage.getItem('xmppPassword');
+				if (xmppUsername && xmppPassword) {
+					const roomNames = chatsState.items.map((chat) => chat.name);
+					await connectAndJoinRooms(xmppUsername, xmppPassword, roomNames);
+					await loadLastMessages(roomNames);
+				}
+			} catch (err) {
+				console.error('XMPP sync after create failed:', err);
+			}
+			await selectChat(roomName);
+		} finally {
+			syncingNewChat = false;
 		}
-		await selectChat(roomName);
 	}
 
 	let deletingChat = $state(false);
@@ -491,40 +501,79 @@
 	}
 
 	let mediaInputEl = $state<HTMLInputElement | null>(null);
-	let sendingMedia = $state(false);
+	// picked files are uploaded right away and staged next to the composer;
+	// Send ships them all in one message with the typed text as the caption
+	let pendingAttachments = $state<UploadedFile[]>([]);
+	let uploadingCount = $state(0);
 
-	async function sendMedia(event: Event) {
+	async function stageAttachments(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file || !selectedRoom || sendingMedia) return;
-		sendingMedia = true;
+		const files = [...(input.files ?? [])];
+		input.value = ''; // allow re-selecting the same file
+		if (files.length === 0 || !selectedRoom) return;
 		sendError = '';
+		uploadingCount += files.length;
+		await Promise.all(
+			files.map(async (file) => {
+				try {
+					const uploaded = await uploadFile(file);
+					pendingAttachments = [...pendingAttachments, uploaded];
+				} catch (err) {
+					console.error('file upload failed:', err);
+					sendError = 'Failed to upload a file. Check the connection and try again.';
+				} finally {
+					uploadingCount -= 1;
+				}
+			})
+		);
+	}
+
+	function removeAttachment(index: number) {
+		pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
+	}
+
+	// fetch → blob → <a download>: saves the file without opening a tab
+	// (a target="_blank" link flashes a new tab that instantly closes);
+	// the files server allows cross-origin fetches from the app
+	async function downloadFile(media: MessageMedia) {
 		try {
-			const uploaded = await uploadFile(file);
-			await sendMediaMessage(selectedRoom, uploaded);
+			const response = await fetch(media.location);
+			if (!response.ok) throw new Error(`HTTP ${response.status}`);
+			const blob = await response.blob();
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = media.originalName || 'file';
+			link.click();
+			URL.revokeObjectURL(url);
 		} catch (err) {
-			console.error('media send failed:', err);
-			sendError = 'Failed to send the file. Check the connection and try again.';
-		} finally {
-			sendingMedia = false;
-			input.value = ''; // allow re-selecting the same file
+			console.error('download failed:', err);
+			window.open(media.location, '_blank', 'noopener');
 		}
 	}
 
 	// every image of the open chat, oldest → newest — one PhotoSwipe gallery,
 	// so the viewer can swipe between all pictures of the conversation
-	const roomImages = $derived(
-		(selectedMessages?.messages ?? []).filter((m) => m.media?.mimetype.startsWith('image/'))
-	);
+	const roomImages = $derived.by(() => {
+		const images: { messageId: string; media: MessageMedia }[] = [];
+		for (const message of selectedMessages?.messages ?? []) {
+			for (const media of message.media ?? []) {
+				if (media.mimetype.startsWith('image/')) images.push({ messageId: message.id, media });
+			}
+		}
+		return images;
+	});
 
-	function openImage(messageId: string) {
-		const index = roomImages.findIndex((m) => m.id === messageId);
+	function openImage(messageId: string, location: string) {
+		const index = roomImages.findIndex(
+			(image) => image.messageId === messageId && image.media.location === location
+		);
 		if (index === -1) return;
 		openImageGallery(
-			roomImages.map((m) => ({
-				src: m.media!.location,
-				msrc: m.media!.locationPreview,
-				alt: m.media!.originalName
+			roomImages.map(({ media }) => ({
+				src: media.location,
+				msrc: media.locationPreview,
+				alt: media.originalName
 			})),
 			index
 		);
@@ -656,12 +705,21 @@
 
 	async function sendMessage() {
 		const text = draft.trim();
-		if (!text || !selectedRoom || sending) return;
+		const attachments = pendingAttachments;
+		if ((!text && attachments.length === 0) || !selectedRoom || sending || uploadingCount > 0) {
+			return;
+		}
 		sending = true;
 		sendError = '';
 		try {
-			const mentions = collectMentions(text);
-			await sendRoomMessage(selectedRoom, text, mentions.length > 0 ? mentions : undefined);
+			if (attachments.length > 0) {
+				// the typed text rides along as the caption
+				await sendMediaMessage(selectedRoom, attachments, text);
+				pendingAttachments = [];
+			} else {
+				const mentions = collectMentions(text);
+				await sendRoomMessage(selectedRoom, text, mentions.length > 0 ? mentions : undefined);
+			}
 			draft = '';
 			draftMentions = [];
 			mentionQuery = null;
@@ -855,7 +913,15 @@
 										{#if last}
 											<p class="truncate text-xs text-gray-500 dark:text-gray-400">
 												<span class="font-medium">{senderName(chat, last)}:</span>
-												{last.media ? `📎 ${last.media.originalName || 'file'}` : last.body}
+												{last.media
+												? `📎 ${
+														last.body !== 'media'
+															? last.body
+															: last.media.length > 1
+																? `${last.media.length} files`
+																: last.media[0].originalName || 'file'
+													}`
+												: last.body}
 											</p>
 										{:else if chat.description}
 											<p class="truncate text-xs text-gray-500 dark:text-gray-400">{chat.description}</p>
@@ -937,7 +1003,7 @@
 											<img
 												src={occupant.profileImage}
 												alt=""
-												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+												class="relative h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
 											/>
 										{:else}
 											<span
@@ -974,7 +1040,7 @@
 											<img
 												src={member.profileImage}
 												alt=""
-												class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+												class="relative h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
 											/>
 										{:else}
 											<span
@@ -1110,7 +1176,7 @@
 											<img
 												src={avatar}
 												alt=""
-												class="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+												class="relative h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
 											/>
 										{:else}
 											<div
@@ -1139,51 +1205,111 @@
 											</span>
 										</div>
 										{#if message.media}
-											{#if message.media.mimetype.startsWith('image/')}
-												{@const newest = message.id === selectedMessages.messages.at(-1)?.id}
+											{@const newest = message.id === selectedMessages.messages.at(-1)?.id}
+											{@const images = message.media.filter((m) => m.mimetype.startsWith('image/'))}
+											{@const others = message.media.filter((m) => !m.mimetype.startsWith('image/'))}
+											<!-- media messages get a fixed 400px block (whatever the mix of
+											     images and files) so previews stay readable; max-w-full lets
+											     it shrink inside the 75% bubble cap on narrow screens -->
+											<div class="mt-1 w-[400px] max-w-full space-y-1">
+											{#if images.length === 1}
 												<button
 													type="button"
-													onclick={() => openImage(message.id)}
-													class="block cursor-zoom-in"
-													aria-label="View {message.media.originalName || 'image'} full size"
+													onclick={() => openImage(message.id, images[0].location)}
+													class="block w-full cursor-zoom-in"
+													aria-label="View {images[0].originalName || 'image'} full size"
 												>
 													<!-- the image gets its height after the scroll-to-bottom ran;
 													     re-scroll when the newest one finishes loading -->
 													<img
-														src={message.media.locationPreview}
-														alt={message.media.originalName}
+														src={images[0].locationPreview}
+														alt={images[0].originalName}
 														onload={newest ? () => scrollToBottom() : undefined}
-														class="mt-1 max-h-64 rounded-lg object-contain"
+														class="max-h-80 w-full rounded-lg object-cover"
 													/>
 												</button>
-											{:else if message.media.mimetype.startsWith('video/')}
-												<!-- svelte-ignore a11y_media_has_caption -->
-												<video
-													src={message.media.location}
-													controls
-													class="mt-1 max-h-64 rounded-lg"
-												></video>
-											{:else if message.media.mimetype.startsWith('audio/')}
-												<audio src={message.media.location} controls class="mt-1"></audio>
-											{:else}
-												<a
-													href={message.media.location}
-													target="_blank"
-													rel="noopener noreferrer"
-													class="mt-1 flex items-center gap-2 rounded-lg px-3 py-2 {mine
-														? 'bg-indigo-500/60 hover:bg-indigo-500'
-														: 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600'}"
-												>
-													<span class="text-lg">📎</span>
-													<span class="min-w-0">
-														<span class="block truncate text-base font-medium">
-															{message.media.originalName || 'file'}
+											{:else if images.length > 1}
+												<!-- collage: 2 side by side, 3 = one tall on the left + two
+												     stacked, 4+ = a 2x2 grid with a "+N" veil on the last cell;
+												     the veiled images are reachable by swiping in the gallery -->
+												{@const shown = images.slice(0, 4)}
+												{@const extra = images.length - shown.length}
+												<div class="grid w-full grid-cols-2 gap-1">
+													{#each shown as media, mi (media.location + mi)}
+														{@const tall = images.length === 3 && mi === 0}
+														<button
+															type="button"
+															onclick={() => openImage(message.id, media.location)}
+															class="relative block cursor-zoom-in overflow-hidden rounded-lg {tall
+																? 'row-span-2'
+																: 'aspect-square'}"
+															aria-label="View {media.originalName || 'image'} full size"
+														>
+															<img
+																src={media.locationPreview}
+																alt={media.originalName}
+																class="h-full w-full object-cover"
+															/>
+															{#if extra > 0 && mi === shown.length - 1}
+																<span
+																	class="absolute inset-0 flex items-center justify-center bg-black/40 text-2xl font-semibold text-white"
+																>
+																	+{extra}
+																</span>
+															{/if}
+														</button>
+													{/each}
+												</div>
+											{/if}
+											{#each others as media, mi (media.location + mi)}
+												{#if media.mimetype.startsWith('video/')}
+													<!-- svelte-ignore a11y_media_has_caption -->
+													<video src={media.location} controls class="max-h-64 w-full rounded-lg"
+													></video>
+												{:else if media.mimetype.startsWith('audio/')}
+													<audio src={media.location} controls class="w-full"></audio>
+												{:else}
+													<div
+														class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 {mine
+															? 'bg-indigo-500/60'
+															: 'bg-gray-100 dark:bg-gray-700'}"
+													>
+														<span
+															class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[10px] font-semibold uppercase {mine
+																? 'bg-indigo-800/70 text-indigo-100'
+																: 'bg-gray-600 text-gray-100 dark:bg-gray-900'}"
+														>
+															{(media.originalName.includes('.')
+																? media.originalName.split('.').pop()!
+																: 'file'
+															).slice(0, 4)}
 														</span>
-														<span class="block text-xs {mine ? 'text-indigo-200' : 'text-gray-500 dark:text-gray-400'}">
-															{formatSize(message.media.size)}
+														<span class="min-w-0 flex-1">
+															<span class="block truncate text-base font-medium">
+																{media.originalName || 'file'}
+															</span>
+															<span class="block text-xs {mine ? 'text-indigo-200' : 'text-gray-500 dark:text-gray-400'}">
+																{formatSize(media.size)}
+															</span>
 														</span>
-													</span>
-												</a>
+														<button
+															type="button"
+															onclick={() => downloadFile(media)}
+															title="Download {media.originalName || 'file'}"
+															aria-label="Download {media.originalName || 'file'}"
+															class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base {mine
+																? 'bg-indigo-800/70 text-white hover:bg-indigo-800'
+																: 'bg-white text-gray-700 shadow-sm hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-600'}"
+														>
+															↓
+														</button>
+													</div>
+												{/if}
+											{/each}
+											</div>
+											{#if message.body && message.body !== 'media'}
+												<!-- the caption travels in the body ("media" = no caption) -->
+												<p class="mt-1 text-base whitespace-pre-wrap">{message.body}</p>
 											{/if}
 										{:else}
 											<p class="text-base whitespace-pre-wrap">
@@ -1296,17 +1422,63 @@
 					{#if sendError}
 						<p class="mb-2 text-xs text-red-600 dark:text-red-400" role="alert">{sendError}</p>
 					{/if}
+					{#if pendingAttachments.length > 0 || uploadingCount > 0}
+						<div class="mb-2 flex flex-wrap items-center gap-2">
+							{#each pendingAttachments as attachment, i (attachment._id)}
+								<div
+									class="relative rounded-lg ring-1 ring-gray-200 dark:ring-gray-700 {attachment.mimetype.startsWith(
+										'image/'
+									)
+										? ''
+										: 'flex items-center gap-1.5 bg-gray-100 py-1 pr-7 pl-2 dark:bg-gray-800'}"
+								>
+									{#if attachment.mimetype.startsWith('image/')}
+										<img
+											src={attachment.locationPreview}
+											alt={attachment.originalname}
+											class="h-16 w-16 rounded-lg object-cover"
+										/>
+									{:else}
+										<span class="text-base">📎</span>
+										<span class="max-w-36 truncate text-xs text-gray-700 dark:text-gray-300">
+											{attachment.originalname}
+										</span>
+									{/if}
+									<button
+										type="button"
+										onclick={() => removeAttachment(i)}
+										title="Remove attachment"
+										aria-label="Remove {attachment.originalname}"
+										class="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-gray-700 text-xs leading-none text-white shadow hover:bg-red-600 dark:bg-gray-600 dark:hover:bg-red-500"
+									>
+										×
+									</button>
+								</div>
+							{/each}
+							{#if uploadingCount > 0}
+								<div
+									class="flex h-16 w-16 items-center justify-center rounded-lg bg-gray-100 ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700"
+									role="status"
+									aria-label="Uploading…"
+								>
+									<div
+										class="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-600 dark:border-gray-600 dark:border-t-indigo-400"
+									></div>
+								</div>
+							{/if}
+						</div>
+					{/if}
 					<div class="flex gap-2">
-						<input type="file" class="hidden" bind:this={mediaInputEl} onchange={sendMedia} />
+						<input type="file" multiple class="hidden" bind:this={mediaInputEl} onchange={stageAttachments} />
 						<button
 							type="button"
 							onclick={() => mediaInputEl?.click()}
-							disabled={sendingMedia || xmppState.status !== 'online'}
-							title="Attach a file"
-							aria-label="Attach a file"
+							disabled={xmppState.status !== 'online'}
+							title="Attach images or files"
+							aria-label="Attach images or files"
 							class="shrink-0 rounded-md bg-white px-3 py-2 text-sm text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800"
 						>
-							{sendingMedia ? '…' : '📎'}
+							📎
 						</button>
 						<input
 							type="text"
@@ -1316,15 +1488,20 @@
 							onkeydown={composerKeydown}
 							onkeyup={updateMentionToken}
 							onclick={updateMentionToken}
-							placeholder={xmppState.status === 'online'
-								? 'Type a message…'
-								: 'Connecting…'}
+							placeholder={xmppState.status !== 'online'
+								? 'Connecting…'
+								: pendingAttachments.length > 0
+									? 'Add a caption…'
+									: 'Type a message…'}
 							disabled={xmppState.status !== 'online'}
 							class="block w-full rounded-md border-0 bg-white px-3 py-2 text-base text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500 dark:disabled:bg-gray-800/50"
 						/>
 						<button
 							type="submit"
-							disabled={!draft.trim() || sending || xmppState.status !== 'online'}
+							disabled={(!draft.trim() && pendingAttachments.length === 0) ||
+								sending ||
+								uploadingCount > 0 ||
+								xmppState.status !== 'online'}
 							class="shrink-0 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{sending ? 'Sending…' : 'Send'}
@@ -1398,6 +1575,17 @@
 />
 
 <CreateChatDialog bind:open={showNewChat} {myNickname} oncreated={onChatCreated} />
+
+{#if syncingNewChat}
+	<div
+		class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-gray-900/40 dark:bg-black/60"
+		role="status"
+		aria-live="polite"
+	>
+		<div class="h-9 w-9 animate-spin rounded-full border-[3px] border-white/30 border-t-white"></div>
+		<p class="text-sm font-medium text-white">Setting up your chat…</p>
+	</div>
+{/if}
 
 {#if selectedChat}
 	<ManageMembersDialog bind:open={showMembers} chat={selectedChat} {myNickname} />

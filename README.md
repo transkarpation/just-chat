@@ -22,7 +22,8 @@ chat management, ejabberd (XMPP over WebSocket) for real-time messaging.
   blue `✓✓` (read by at least one member); the tooltip shows both counts.
   See [Delivery & read receipts](#delivery--read-receipts).
 - **Media** — file upload (`/v1/files/`) sent in the Ethora media-stanza
-  format; images open in a PhotoSwipe gallery, video/audio play inline.
+  format; several files can go in one message with an optional text caption;
+  images open in a PhotoSwipe gallery, video/audio play inline.
 - **Mentions** — `@`-autocomplete in the composer, sent as XEP-0372
   references next to a plain-text body; highlighted rendering, louder
   notification sound and a "mentioned you" browser notification.
@@ -93,7 +94,10 @@ for interop with official Ethora clients:
   backend keeps the membership. Backend membership changes propagate to
   `/chats/my` asynchronously (~10–60 s), so the UI updates local state first.
 - **Media message** = body `media` + `<store>` hint + `<data isMediafile="true" …>`
-  with the uploaded file's metadata.
+  with the uploaded file's metadata. This client extends the format (while
+  staying compatible with the single-file shape): one `<data>` element per
+  attached file, and the body may carry a text caption instead of the
+  literal `media` — see [Media messages](#media-messages).
 - **Delete message** = `<body xmlns="wow"/>` + `<delete id="<archive-id>"/>`;
   the room reflects it to everyone and MAM keeps a tombstone.
 - **Mentions** = XEP-0372 `<reference type="mention" begin end uri="xmpp:…"/>`
@@ -107,6 +111,51 @@ for interop with official Ethora clients:
 - **Voluntary leave** is signalled with `<status>left-room</status>`
   inside the unavailable presence — on the wire a plain leave is otherwise
   indistinguishable from a connection drop.
+
+## Media messages
+
+Attachments are uploaded to `POST /v1/files/` first; the chat message then
+only carries their metadata. The classic Ethora shape is one file per
+message: the body is the literal `media` and the metadata sits in a single
+`<data isMediafile="true" …>` element. This client extends that in two
+backward-compatible ways — several files ride in one message as **one
+`<data>` element each**, and the body may carry a **text caption** instead
+of the literal `media`:
+
+```xml
+<message id="send-media-message:fcc6…" type="groupchat" to="room@conference…">
+  <body>look at these two</body>            <!-- caption; "media" = no caption -->
+  <store xmlns="urn:xmpp:hints"/>
+  <data isMediafile="true" expiresAt="0"
+        location="https://files…/a62a….jpg" locationPreview="https://files…/6a51….jpg"
+        mimetype="image/jpeg" originalName="one.jpg" size="68980"
+        isReply="false" showInChannel="false" mainMessage="" push="true"/>
+  <data isMediafile="true" expiresAt="0"
+        location="https://files…/b73b….jpg" locationPreview="https://files…/7b62….jpg"
+        mimetype="image/jpeg" originalName="two.jpg" size="41656"
+        isReply="false" showInChannel="false" mainMessage="" push="true"/>
+</message>
+```
+
+Verified live against the QA ejabberd: a multi-`<data>` stanza survives both
+the MUC reflection and the MAM archive with all elements and the caption
+intact.
+
+Client handling:
+
+- **Sending**: files picked via 📎 are uploaded immediately and staged next
+  to the composer (thumbnails/chips with a remove button); Send ships them
+  all in a single message with the typed text as the caption.
+- **Receiving**: the parser collects *all* `<data isMediafile="true">`
+  children into the message's `media` list, so the official single-file
+  format is just the one-element case. A body other than `media` is the
+  caption.
+- **Rendering**: images form a fixed-width (400px) collage — 2 side by
+  side, 3 as one tall + two stacked, 4 as a 2×2 grid, more than 4 as a 2×2
+  grid with a “+N” veil (the hidden ones are reachable by swiping in the
+  PhotoSwipe gallery). Non-image files are listed below the images with a
+  download button that fetches the file as a blob (no tab flash);
+  video/audio play inline. The caption renders under the attachments.
 
 ## Delivery & read receipts
 

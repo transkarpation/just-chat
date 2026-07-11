@@ -25,8 +25,9 @@ export interface ChatMessage {
 	body: string;
 	/** ISO timestamp from the archive's <delay> element */
 	timestamp: string;
-	/** attached file — the body is the literal "media" for these messages */
-	media?: MessageMedia;
+	/** attached files — for these messages the body is either the literal
+	 * "media" (no caption) or the caption text */
+	media?: MessageMedia[];
 	/** @-mentions of chat members inside the body */
 	mentions?: MessageMention[];
 	/** own message shown optimistically, before the server echoed it back;

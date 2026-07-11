@@ -474,19 +474,23 @@ export async function subscribeToRoom(roomName: string, nickname: string): Promi
 }
 
 /**
- * Ethora convention for attachments: the message body is the literal "media"
- * and the file metadata travels in a <data isMediafile="true"> element.
+ * Ethora convention for attachments: the file metadata travels in
+ * <data isMediafile="true"> elements. The classic format is a single element
+ * with the body being the literal "media"; our extension allows several
+ * elements in one message (a multi-image send) and a caption in the body.
  */
-function mediaMeta(message: ReturnType<typeof xml>): MessageMedia | undefined {
-	const data = message.getChild('data');
-	if (data?.attrs.isMediafile !== 'true' || !data.attrs.location) return undefined;
-	return {
-		location: String(data.attrs.location),
-		locationPreview: String(data.attrs.locationPreview || data.attrs.location),
-		mimetype: String(data.attrs.mimetype ?? ''),
-		originalName: String(data.attrs.originalName ?? ''),
-		size: Number(data.attrs.size) || 0
-	};
+function mediaMeta(message: ReturnType<typeof xml>): MessageMedia[] | undefined {
+	const media = message
+		.getChildren('data')
+		.filter((data) => data.attrs.isMediafile === 'true' && data.attrs.location)
+		.map((data) => ({
+			location: String(data.attrs.location),
+			locationPreview: String(data.attrs.locationPreview || data.attrs.location),
+			mimetype: String(data.attrs.mimetype ?? ''),
+			originalName: String(data.attrs.originalName ?? ''),
+			size: Number(data.attrs.size) || 0
+		}));
+	return media.length > 0 ? media : undefined;
 }
 
 /**
@@ -659,14 +663,20 @@ export async function sendRoomMessage(
 }
 
 /**
- * Send an already-uploaded file (POST /v1/files/) to a room. The stanza
- * follows the Ethora media format: body "media", a store hint so the server
- * archives it, and the file metadata in a <data isMediafile="true"> element.
+ * Send already-uploaded files (POST /v1/files/) to a room. The stanza follows
+ * the Ethora media format — a store hint so the server archives it and the
+ * metadata of each file in a <data isMediafile="true"> element — with the
+ * body carrying the optional caption instead of the literal "media".
  */
-export async function sendMediaMessage(roomName: string, file: UploadedFile): Promise<void> {
+export async function sendMediaMessage(
+	roomName: string,
+	files: UploadedFile[],
+	caption = ''
+): Promise<void> {
 	if (!xmpp || xmppState.status !== 'online') {
 		throw new Error('XMPP is not connected');
 	}
+	if (files.length === 0) return;
 	await xmpp.send(
 		xml(
 			'message',
@@ -675,36 +685,23 @@ export async function sendMediaMessage(roomName: string, file: UploadedFile): Pr
 				type: 'groupchat',
 				to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`
 			},
-			xml('body', {}, 'media'),
+			xml('body', {}, caption.trim() || 'media'),
 			xml('store', { xmlns: 'urn:xmpp:hints' }),
-			xml('data', {
-				senderJID: `${currentUser}@${PUBLIC_XMPP_HOST}`,
-				senderFirstName: localStorage.getItem('firstName') ?? '',
-				senderLastName: localStorage.getItem('lastName') ?? '',
-				senderWalletAddress: file.ownerKey,
-				isSystemMessage: 'false',
-				tokenAmount: '0',
-				receiverMessageId: '0',
-				photoURL: localStorage.getItem('profileImage') ?? '',
-				isMediafile: 'true',
-				createdAt: file.createdAt,
-				expiresAt: String(file.expiresAt),
-				fileName: file.filename,
-				location: file.location,
-				locationPreview: file.locationPreview,
-				mimetype: file.mimetype,
-				originalName: file.originalname,
-				ownerKey: file.ownerKey,
-				size: String(file.size),
-				updatedAt: file.updatedAt,
-				userId: file.userId,
-				attachmentId: file._id,
-				isReply: 'false',
-				showInChannel: 'false',
-				mainMessage: '',
-				roomJid: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`,
-				push: 'true'
-			})
+			...files.map((file) =>
+				xml('data', {
+					isMediafile: 'true',
+					expiresAt: String(file.expiresAt),
+					location: file.location,
+					locationPreview: file.locationPreview,
+					mimetype: file.mimetype,
+					originalName: file.originalname,
+					size: String(file.size),
+					isReply: 'false',
+					showInChannel: 'false',
+					mainMessage: '',
+					push: 'true'
+				})
+			)
 		)
 	);
 }

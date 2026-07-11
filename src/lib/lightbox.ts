@@ -30,12 +30,18 @@ function measure(src: string): Promise<{ w: number; h: number }> {
 
 /** Open a PhotoSwipe gallery over the given images, starting at `index`. */
 export async function openImageGallery(images: GalleryImage[], index: number): Promise<void> {
-	// know the clicked image's real size before opening so the zoom
-	// animation starts with the correct aspect ratio
-	await measure(images[index].src);
+	// don't wait for the full-size image (that reads as a dead click on big
+	// files) — the preview is already rendered in the chat, so it comes out
+	// of the browser cache instantly and its aspect ratio is the same
+	const clicked = images[index];
+	if (!dimensions.has(clicked.src) && clicked.msrc) {
+		await measure(clicked.msrc);
+	}
 
 	const dataSource = images.map((image) => {
-		const dims = dimensions.get(image.src);
+		// provisional size from the preview until the real one is measured
+		const dims =
+			dimensions.get(image.src) ?? (image.msrc ? dimensions.get(image.msrc) : undefined);
 		return {
 			src: image.src,
 			msrc: image.msrc,
@@ -48,10 +54,10 @@ export async function openImageGallery(images: GalleryImage[], index: number): P
 	const pswp = new PhotoSwipe({ dataSource, index });
 	pswp.init();
 
-	// the other images are measured in the background; refresh their slides
-	// once the size is known so swiping to them renders correctly
+	// measure the real sizes in the background; refresh each slide once its
+	// size is known so the provisional preview dimensions get replaced
 	dataSource.forEach((item, i) => {
-		if (item.width) return;
+		if (dimensions.has(item.src)) return;
 		measure(item.src).then(({ w, h }) => {
 			item.width = w;
 			item.height = h;
