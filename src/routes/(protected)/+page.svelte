@@ -46,7 +46,7 @@
 	let notifPermission = $state<NotificationPermission | 'unsupported' | null>(null);
 	let notifBannerDismissed = $state(false);
 	let messagesEl = $state<HTMLElement | null>(null);
-	let composerEl = $state<HTMLInputElement | null>(null);
+	let composerEl = $state<HTMLTextAreaElement | null>(null);
 	let showOnlineList = $state(false);
 	let showMembersList = $state(false);
 	let membersSearch = $state('');
@@ -245,6 +245,7 @@
 		joinError = '';
 		deleteError = '';
 		prevNewestId = null;
+		cancelVoice(); // a recording belongs to the chat it was started in
 		// history already in state (chat was opened before) — jump right away
 		await scrollToBottom();
 		// autofocus only on the desktop layout — on mobile it would pop the
@@ -532,6 +533,128 @@
 		pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
 	}
 
+	// --- voice messages (MediaRecorder) ---
+	// idle → recording (mic click) → preview (pause) → sent / discarded;
+	// the ✓ button also sends straight from the recording state
+	let voiceState = $state<'idle' | 'recording' | 'preview'>('idle');
+	let voiceSeconds = $state(0);
+	let voiceUrl = $state('');
+	let sendingVoice = $state(false);
+	let voiceRecorder: MediaRecorder | null = null;
+	let voiceStream: MediaStream | null = null;
+	let voiceChunks: Blob[] = [];
+	let voiceBlob: Blob | null = null;
+	let voiceTimer: ReturnType<typeof setInterval> | null = null;
+
+	async function startVoiceRecording() {
+		if (voiceState !== 'idle' || xmppState.status !== 'online') return;
+		sendError = '';
+		let stream: MediaStream;
+		try {
+			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		} catch (err) {
+			console.error('microphone access failed:', err);
+			sendError = 'Microphone is unavailable. Allow access in the browser and try again.';
+			return;
+		}
+		// Chrome/Firefox record webm/opus, Safari records mp4 — take what's there
+		const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((t) =>
+			MediaRecorder.isTypeSupported(t)
+		);
+		voiceStream = stream;
+		voiceChunks = [];
+		voiceBlob = null;
+		voiceRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+		voiceRecorder.ondataavailable = (event) => {
+			if (event.data.size > 0) voiceChunks.push(event.data);
+		};
+		voiceRecorder.start();
+		voiceState = 'recording';
+		voiceSeconds = 0;
+		voiceTimer = setInterval(() => (voiceSeconds += 1), 1000);
+	}
+
+	/** Stop the recorder and resolve with the recorded blob. */
+	function stopVoiceRecorder(): Promise<Blob | null> {
+		return new Promise((resolve) => {
+			const recorder = voiceRecorder;
+			if (!recorder || recorder.state === 'inactive') {
+				resolve(voiceBlob);
+				return;
+			}
+			recorder.onstop = () => {
+				const blob = new Blob(voiceChunks, { type: recorder.mimeType || 'audio/webm' });
+				resolve(blob.size > 0 ? blob : null);
+			};
+			recorder.stop();
+		});
+	}
+
+	function releaseVoiceStream() {
+		voiceStream?.getTracks().forEach((track) => track.stop());
+		voiceStream = null;
+		voiceRecorder = null;
+		if (voiceTimer) {
+			clearInterval(voiceTimer);
+			voiceTimer = null;
+		}
+	}
+
+	async function pauseVoiceToPreview() {
+		voiceBlob = await stopVoiceRecorder();
+		releaseVoiceStream();
+		if (!voiceBlob) {
+			cancelVoice();
+			return;
+		}
+		voiceUrl = URL.createObjectURL(voiceBlob);
+		voiceState = 'preview';
+	}
+
+	function cancelVoice() {
+		if (voiceRecorder && voiceRecorder.state !== 'inactive') {
+			voiceRecorder.onstop = null;
+			voiceRecorder.stop();
+		}
+		releaseVoiceStream();
+		if (voiceUrl) URL.revokeObjectURL(voiceUrl);
+		voiceUrl = '';
+		voiceBlob = null;
+		voiceChunks = [];
+		voiceSeconds = 0;
+		voiceState = 'idle';
+	}
+
+	async function sendVoiceMessage() {
+		if (sendingVoice || !selectedRoom) return;
+		sendingVoice = true;
+		sendError = '';
+		try {
+			const blob = voiceState === 'recording' ? await stopVoiceRecorder() : voiceBlob;
+			releaseVoiceStream();
+			if (!blob) {
+				cancelVoice();
+				return;
+			}
+			const ext = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+			const file = new File([blob], `voice-message.${ext}`, { type: blob.type || 'audio/webm' });
+			const uploaded = await uploadFile(file);
+			await sendMediaMessage(selectedRoom, [uploaded]);
+			cancelVoice();
+		} catch (err) {
+			console.error('voice send failed:', err);
+			sendError = 'Failed to send the voice message. Check the connection and try again.';
+		} finally {
+			sendingVoice = false;
+		}
+	}
+
+	function formatVoiceTime(total: number): string {
+		const minutes = Math.floor(total / 60);
+		const seconds = total % 60;
+		return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+	}
+
 	// fetch → blob → <a download>: saves the file without opening a tab
 	// (a target="_blank" link flashes a new tab that instantly closes);
 	// the files server allows cross-origin fetches from the app
@@ -665,21 +788,58 @@
 		composerEl?.setSelectionRange(position, position);
 	}
 
+	// the composer textarea grows with its content up to ~4 lines,
+	// then keeps that height and scrolls inside
+	function autosizeComposer() {
+		const el = composerEl;
+		if (!el) return;
+		el.style.height = 'auto';
+		el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+	}
+
+	// Ctrl+Enter (and Shift+Enter natively) insert a line break; the caret
+	// needs to be restored manually after Svelte re-renders the value
+	async function insertNewline() {
+		const el = composerEl;
+		if (!el) return;
+		const start = el.selectionStart ?? draft.length;
+		const end = el.selectionEnd ?? start;
+		draft = draft.slice(0, start) + '\n' + draft.slice(end);
+		await tick();
+		el.setSelectionRange(start + 1, start + 1);
+		autosizeComposer();
+	}
+
 	function composerKeydown(event: KeyboardEvent) {
-		if (mentionQuery === null || mentionCandidates.length === 0) return;
-		if (event.key === 'ArrowDown') {
-			event.preventDefault();
-			mentionIndex = (mentionIndex + 1) % mentionCandidates.length;
-		} else if (event.key === 'ArrowUp') {
-			event.preventDefault();
-			mentionIndex = (mentionIndex - 1 + mentionCandidates.length) % mentionCandidates.length;
-		} else if (event.key === 'Enter' || event.key === 'Tab') {
-			// pick instead of submitting the form / leaving the field
-			event.preventDefault();
-			pickMention(mentionCandidates[mentionIndex]);
-		} else if (event.key === 'Escape') {
-			event.preventDefault();
-			mentionQuery = null;
+		if (mentionQuery !== null && mentionCandidates.length > 0) {
+			if (event.key === 'ArrowDown') {
+				event.preventDefault();
+				mentionIndex = (mentionIndex + 1) % mentionCandidates.length;
+				return;
+			} else if (event.key === 'ArrowUp') {
+				event.preventDefault();
+				mentionIndex = (mentionIndex - 1 + mentionCandidates.length) % mentionCandidates.length;
+				return;
+			} else if (event.key === 'Enter' || event.key === 'Tab') {
+				// pick instead of submitting the form / leaving the field
+				event.preventDefault();
+				pickMention(mentionCandidates[mentionIndex]);
+				return;
+			} else if (event.key === 'Escape') {
+				event.preventDefault();
+				mentionQuery = null;
+				return;
+			}
+		}
+		if (event.key === 'Enter') {
+			if (event.ctrlKey) {
+				event.preventDefault();
+				void insertNewline();
+			} else if (!event.shiftKey) {
+				// plain Enter sends (a textarea would insert a newline itself)
+				event.preventDefault();
+				sendMessage();
+			}
 		}
 	}
 
@@ -723,6 +883,8 @@
 			draft = '';
 			draftMentions = [];
 			mentionQuery = null;
+			// shrink the textarea back to one row
+			void tick().then(autosizeComposer);
 		} catch (err) {
 			console.error('send failed:', err);
 			sendError = 'Failed to send the message. Check the connection and try again.';
@@ -762,9 +924,9 @@
 
 <!-- h-dvh, not h-screen: mobile 100vh overshoots the visible viewport and
      hides the composer behind the browser chrome -->
-<div class="flex h-dvh justify-center bg-gray-100 dark:bg-black">
-	<!-- cap the app width on large screens; children keep their layout -->
-	<div class="flex h-full w-full max-w-6xl flex-col border-gray-200 bg-gray-50 xl:border-x dark:border-gray-800 dark:bg-gray-950">
+<!-- the shell (app header, chat list, pane chrome) spans the full viewport;
+     only the message content inside the pane is capped (max-w-6xl, centered) -->
+<div class="flex h-dvh flex-col bg-gray-50 dark:bg-gray-950">
 	<header class="shrink-0 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
 		<div class="flex items-center justify-between px-4 py-3 sm:px-6">
 			<h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">User page</h1>
@@ -906,8 +1068,16 @@
 													yours
 												</span>
 											{/if}
-											{#if xmppState.joinedRooms.includes(chat.name)}
-												<span class="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
+											<!-- green dot only for direct chats: the other person is
+											     online (present in the room's occupants) -->
+											{#if chat.type === 'private'}
+												{@const other = chat.members.find((m) => m.xmppUsername !== myNickname)}
+												{#if other && xmppState.occupants[chat.name]?.includes(other.xmppUsername)}
+													<span
+														class="h-2 w-2 shrink-0 rounded-full bg-green-500"
+														title="Online"
+													></span>
+												{/if}
 											{/if}
 										</div>
 										{#if last}
@@ -1139,6 +1309,8 @@
 				{/if}
 
 				<div bind:this={messagesEl} class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+					<!-- message content is capped and centered on wide screens -->
+					<div class="mx-auto w-full max-w-6xl">
 					{#if selectedMessages && !selectedMessages.complete}
 						<div class="mb-4 text-center">
 							<button
@@ -1372,6 +1544,7 @@
 							{/each}
 						</ul>
 					{/if}
+					</div>
 				</div>
 
 				<form
@@ -1388,7 +1561,7 @@
 							role="listbox"
 							tabindex="-1"
 							onmousedown={(event) => event.preventDefault()}
-							class="absolute right-4 bottom-full left-4 z-30 mb-1 max-h-56 overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 sm:right-6 sm:left-6 dark:bg-gray-800 dark:ring-gray-700"
+							class="absolute right-4 bottom-full left-4 z-30 mx-auto mb-1 max-h-56 max-w-6xl overflow-y-auto rounded-lg bg-white py-1 shadow-lg ring-1 ring-gray-200 sm:right-6 sm:left-6 dark:bg-gray-800 dark:ring-gray-700"
 						>
 							{#each mentionCandidates as member, i (member.xmppUsername)}
 								<button
@@ -1425,6 +1598,8 @@
 							{/each}
 						</div>
 					{/if}
+					<!-- composer content follows the same cap as the messages above -->
+					<div class="mx-auto w-full max-w-6xl">
 					{#if sendError}
 						<p class="mb-2 text-xs text-red-600 dark:text-red-400" role="alert">{sendError}</p>
 					{/if}
@@ -1474,7 +1649,81 @@
 							{/if}
 						</div>
 					{/if}
-					<div class="flex gap-2">
+					{#if voiceState === 'recording'}
+						<!-- recording bar replaces the composer row -->
+						<div class="flex h-10 items-center gap-3">
+							<span class="flex shrink-0 items-center gap-2 font-medium text-red-600 dark:text-red-400">
+								<svg class="h-5 w-5 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+								<span class="tabular-nums">{formatVoiceTime(voiceSeconds)}</span>
+							</span>
+							<span class="min-w-0 flex-1 truncate text-sm text-gray-400 dark:text-gray-500">Recording…</span>
+							<button
+								type="button"
+								onclick={cancelVoice}
+								title="Discard recording"
+								aria-label="Discard recording"
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 hover:text-red-600 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800 dark:hover:text-red-400"
+							>
+								🗑
+							</button>
+							<button
+								type="button"
+								onclick={pauseVoiceToPreview}
+								title="Stop and listen"
+								aria-label="Stop and listen"
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800"
+							>
+								<svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>
+							</button>
+							<button
+								type="button"
+								onclick={sendVoiceMessage}
+								disabled={sendingVoice}
+								title="Send voice message"
+								aria-label="Send voice message"
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+							>
+								{#if sendingVoice}
+									<div class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></div>
+								{:else}
+									<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+								{/if}
+							</button>
+						</div>
+					{:else if voiceState === 'preview'}
+						<!-- listen before sending -->
+						<div class="flex h-10 items-center gap-3">
+							<audio src={voiceUrl} controls class="h-10 min-w-0 flex-1"></audio>
+							<span class="shrink-0 text-sm font-medium tabular-nums text-gray-500 dark:text-gray-400">
+								{formatVoiceTime(voiceSeconds)}
+							</span>
+							<button
+								type="button"
+								onclick={cancelVoice}
+								title="Discard recording"
+								aria-label="Discard recording"
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 hover:text-red-600 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800 dark:hover:text-red-400"
+							>
+								🗑
+							</button>
+							<button
+								type="button"
+								onclick={sendVoiceMessage}
+								disabled={sendingVoice}
+								title="Send voice message"
+								aria-label="Send voice message"
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+							>
+								{#if sendingVoice}
+									<div class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></div>
+								{:else}
+									<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+								{/if}
+							</button>
+						</div>
+					{:else}
+					<!-- items-end keeps the buttons at the bottom while the textarea grows -->
+					<div class="flex items-end gap-2">
 						<input type="file" multiple class="hidden" bind:this={mediaInputEl} onchange={stageAttachments} />
 						<button
 							type="button"
@@ -1486,11 +1735,14 @@
 						>
 							📎
 						</button>
-						<input
-							type="text"
+						<textarea
+							rows="1"
 							bind:this={composerEl}
 							bind:value={draft}
-							oninput={updateMentionToken}
+							oninput={() => {
+								updateMentionToken();
+								autosizeComposer();
+							}}
 							onkeydown={composerKeydown}
 							onkeyup={updateMentionToken}
 							onclick={updateMentionToken}
@@ -1500,18 +1752,40 @@
 									? 'Add a caption…'
 									: 'Type a message…'}
 							disabled={xmppState.status !== 'online'}
-							class="block w-full rounded-md border-0 bg-white px-3 py-2 text-base text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500 dark:disabled:bg-gray-800/50"
-						/>
-						<button
-							type="submit"
-							disabled={(!draft.trim() && pendingAttachments.length === 0) ||
-								sending ||
-								uploadingCount > 0 ||
-								xmppState.status !== 'online'}
-							class="shrink-0 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							{sending ? 'Sending…' : 'Send'}
-						</button>
+							class="block max-h-[120px] w-full resize-none rounded-md border-0 bg-white px-3 py-2 text-base text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500 dark:disabled:bg-gray-800/50"
+						></textarea>
+						{#if draft.trim() || pendingAttachments.length > 0 || uploadingCount > 0}
+							<button
+								type="submit"
+								disabled={(!draft.trim() && pendingAttachments.length === 0) ||
+									sending ||
+									uploadingCount > 0 ||
+									xmppState.status !== 'online'}
+								title="Send"
+								aria-label="Send"
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+							>
+								{#if sending}
+									<div class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></div>
+								{:else}
+									<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+								{/if}
+							</button>
+						{:else}
+							<!-- empty composer: the mic takes the send button's place -->
+							<button
+								type="button"
+								onclick={startVoiceRecording}
+								disabled={xmppState.status !== 'online'}
+								title="Record a voice message"
+								aria-label="Record a voice message"
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-gray-600 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-gray-800"
+							>
+								<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+							</button>
+						{/if}
+					</div>
+					{/if}
 					</div>
 				</form>
 			{:else}
@@ -1549,7 +1823,6 @@
 				</div>
 			{/if}
 		</section>
-	</div>
 	</div>
 </div>
 
