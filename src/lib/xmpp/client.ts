@@ -18,6 +18,7 @@ import {
 	applyDisplayedMarker,
 	compareArchiveIds,
 	removeMessage,
+	replaceMessageBody,
 	forgetRoom,
 	type ChatMessage,
 	type MessageMedia,
@@ -146,6 +147,13 @@ export async function connectAndJoinRooms(
 		const deleted = stanza.getChild('delete');
 		if (deleted?.attrs.id) {
 			removeMessage(room, String(deleted.attrs.id));
+			return;
+		}
+		// a reflected edit (bodyless): <replace id text> swaps the body of an
+		// earlier message; MAM rewrites the archived entry too (verified live)
+		const replace = stanza.getChild('replace');
+		if (replace?.attrs.id) {
+			replaceMessageBody(room, String(replace.attrs.id), String(replace.attrs.text ?? ''));
 			return;
 		}
 		// a delivery receipt (bodyless): someone's client confirmed receiving
@@ -358,7 +366,9 @@ async function fetchRoomHistory(
 			body,
 			timestamp: forwarded?.getChild('delay', 'urn:xmpp:delay')?.attrs.stamp ?? '',
 			media: mediaMeta(message),
-			mentions: mentionsMeta(message)
+			mentions: mentionsMeta(message),
+			// the archive rewrites edited entries in place and marks them
+			edited: message.getChild('replaced') ? true : undefined
 		});
 	};
 
@@ -761,6 +771,33 @@ export async function deleteRoomMessage(roomName: string, messageId: string): Pr
 			},
 			xml('body', { xmlns: 'wow' }),
 			xml('delete', { id: messageId })
+		)
+	);
+}
+
+/**
+ * Edit an own message: a bodyless <replace id="<archive-id>" text="…">
+ * stanza. The room reflects it to every occupant (the live handler swaps the
+ * body then) and the MAM archive rewrites the original entry in place,
+ * adding a <replaced> marker — both verified live against the QA server.
+ */
+export async function editRoomMessage(
+	roomName: string,
+	messageId: string,
+	text: string
+): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') {
+		throw new Error('XMPP is not connected');
+	}
+	await xmpp.send(
+		xml(
+			'message',
+			{
+				id: `edit-message-${Date.now()}`,
+				type: 'groupchat',
+				to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`
+			},
+			xml('replace', { id: messageId, text })
 		)
 	);
 }

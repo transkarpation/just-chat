@@ -30,6 +30,8 @@ export interface ChatMessage {
 	media?: MessageMedia[];
 	/** @-mentions of chat members inside the body */
 	mentions?: MessageMention[];
+	/** body was edited via a <replace> stanza (MAM marks these <replaced>) */
+	edited?: boolean;
 	/** own message shown optimistically, before the server echoed it back;
 	 * `id` is a local placeholder, not an archive id */
 	pending?: boolean;
@@ -172,6 +174,19 @@ export function confirmMessage(
 	}
 	room.messages = room.messages.map((m, i) => (i === index ? confirmed : m));
 	return true;
+}
+
+/**
+ * Apply an edit (<replace> stanza): swap the message body in place. The old
+ * mention ranges no longer match the new text, so they are dropped — the
+ * replace convention carries no references.
+ */
+export function replaceMessageBody(roomName: string, messageId: string, body: string): void {
+	const message = messagesState.rooms[roomName]?.messages.find((m) => m.id === messageId);
+	if (!message) return;
+	message.body = body;
+	message.edited = true;
+	message.mentions = undefined;
 }
 
 /** Drop a message that was deleted in the room. */

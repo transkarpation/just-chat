@@ -6,6 +6,7 @@
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import CreateChatDialog from '$lib/components/CreateChatDialog.svelte';
 	import ManageMembersDialog from '$lib/components/ManageMembersDialog.svelte';
+	import VoicePlayer from '$lib/components/VoicePlayer.svelte';
 	import { getMyChats, deleteChat, type Chat, type ChatMember } from '$lib/api/chats';
 	import { uploadFile, type UploadedFile } from '$lib/api/files';
 	import { openImageGallery } from '$lib/lightbox';
@@ -19,6 +20,7 @@
 		clearMessages,
 		forgetRoom,
 		compareArchiveIds,
+		replaceMessageBody,
 		type ChatMessage,
 		type MessageMedia,
 		type MessageMention,
@@ -33,6 +35,7 @@
 		sendRoomMessage,
 		sendMediaMessage,
 		deleteRoomMessage,
+		editRoomMessage,
 		leaveRoom,
 		subscribeToRoom
 	} from '$lib/xmpp/client';
@@ -246,6 +249,7 @@
 		deleteError = '';
 		prevNewestId = null;
 		cancelVoice(); // a recording belongs to the chat it was started in
+		if (editingMessage) cancelEditMessage(); // so does an unfinished edit
 		// history already in state (chat was opened before) — jump right away
 		await scrollToBottom();
 		// autofocus only on the desktop layout — on mobile it would pop the
@@ -840,6 +844,9 @@
 				event.preventDefault();
 				sendMessage();
 			}
+		} else if (event.key === 'Escape' && editingMessage) {
+			event.preventDefault();
+			cancelEditMessage();
 		}
 	}
 
@@ -863,9 +870,53 @@
 		return found.sort((a, b) => a.begin - b.begin);
 	}
 
+	// --- editing own messages ---
+	let editingMessage = $state<ChatMessage | null>(null);
+
+	async function startEditMessage(message: ChatMessage) {
+		if (message.pending) return;
+		cancelVoice();
+		editingMessage = message;
+		draft = message.body;
+		draftMentions = [];
+		mentionQuery = null;
+		await tick();
+		autosizeComposer();
+		composerEl?.focus();
+	}
+
+	function cancelEditMessage() {
+		editingMessage = null;
+		draft = '';
+		void tick().then(autosizeComposer);
+	}
+
 	async function sendMessage() {
 		const text = draft.trim();
 		const attachments = pendingAttachments;
+		if (editingMessage) {
+			const target = editingMessage;
+			// nothing changed (or emptied) — just leave the edit mode
+			if (!text || text === target.body) {
+				cancelEditMessage();
+				return;
+			}
+			if (!selectedRoom || sending) return;
+			sending = true;
+			sendError = '';
+			try {
+				await editRoomMessage(selectedRoom, target.id, text);
+				// the reflection updates the state too — this just avoids the lag
+				replaceMessageBody(selectedRoom, target.id, text);
+				cancelEditMessage();
+			} catch (err) {
+				console.error('edit failed:', err);
+				sendError = 'Failed to edit the message. Check the connection and try again.';
+			} finally {
+				sending = false;
+			}
+			return;
+		}
 		if ((!text && attachments.length === 0) || !selectedRoom || sending || uploadingCount > 0) {
 			return;
 		}
@@ -1335,6 +1386,17 @@
 								{@const avatar = senderAvatar(selectedChat, message)}
 								<li class="group flex items-end gap-2 {mine ? 'justify-end' : 'justify-start'}">
 									{#if mine && !message.pending}
+										{#if !message.media}
+											<button
+												type="button"
+												onclick={() => startEditMessage(message)}
+												aria-label="Edit message"
+												title="Edit message"
+												class="self-center rounded-md p-1 text-sm text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-gray-200 hover:text-indigo-600 focus-visible:opacity-100 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-indigo-400"
+											>
+												✏️
+											</button>
+										{/if}
 										<button
 											type="button"
 											onclick={() => askDeleteMessage(message)}
@@ -1381,6 +1443,11 @@
 											<span class="text-xs {mine ? 'text-indigo-200' : 'text-gray-400 dark:text-gray-500'}">
 												{formatTime(message.timestamp)}
 											</span>
+											{#if message.edited}
+												<span class="text-xs italic {mine ? 'text-indigo-200' : 'text-gray-400 dark:text-gray-500'}">
+													edited
+												</span>
+											{/if}
 										</div>
 										{#if message.media}
 											{@const newest = message.id === selectedMessages.messages.at(-1)?.id}
@@ -1445,7 +1512,7 @@
 													<video src={media.location} controls class="max-h-64 w-full rounded-lg"
 													></video>
 												{:else if media.mimetype.startsWith('audio/')}
-													<audio src={media.location} controls class="w-full"></audio>
+													<VoicePlayer src={media.location} {mine} />
 												{:else}
 													<div
 														class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 {mine
@@ -1600,6 +1667,23 @@
 					{/if}
 					<!-- composer content follows the same cap as the messages above -->
 					<div class="mx-auto w-full max-w-6xl">
+					{#if editingMessage}
+						<div class="mb-2 flex items-center gap-2 rounded-md bg-indigo-50 px-3 py-1.5 text-sm dark:bg-indigo-950">
+							<span class="shrink-0 font-medium text-indigo-700 dark:text-indigo-300">Editing:</span>
+							<span class="min-w-0 flex-1 truncate text-gray-600 dark:text-gray-400">
+								{editingMessage.body}
+							</span>
+							<button
+								type="button"
+								onclick={cancelEditMessage}
+								title="Cancel editing"
+								aria-label="Cancel editing"
+								class="shrink-0 rounded p-0.5 text-gray-500 hover:bg-indigo-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-indigo-900 dark:hover:text-gray-200"
+							>
+								✕
+							</button>
+						</div>
+					{/if}
 					{#if sendError}
 						<p class="mb-2 text-xs text-red-600 dark:text-red-400" role="alert">{sendError}</p>
 					{/if}
@@ -1692,11 +1776,10 @@
 						</div>
 					{:else if voiceState === 'preview'}
 						<!-- listen before sending -->
-						<div class="flex h-10 items-center gap-3">
-							<audio src={voiceUrl} controls class="h-10 min-w-0 flex-1"></audio>
-							<span class="shrink-0 text-sm font-medium tabular-nums text-gray-500 dark:text-gray-400">
-								{formatVoiceTime(voiceSeconds)}
-							</span>
+						<div class="flex items-center gap-3">
+							<div class="min-w-0 flex-1">
+								<VoicePlayer src={voiceUrl} />
+							</div>
 							<button
 								type="button"
 								onclick={cancelVoice}
@@ -1754,10 +1837,10 @@
 							disabled={xmppState.status !== 'online'}
 							class="block max-h-[120px] w-full resize-none rounded-md border-0 bg-white px-3 py-2 text-base text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 disabled:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500 dark:disabled:bg-gray-800/50"
 						></textarea>
-						{#if draft.trim() || pendingAttachments.length > 0 || uploadingCount > 0}
+						{#if editingMessage || draft.trim() || pendingAttachments.length > 0 || uploadingCount > 0}
 							<button
 								type="submit"
-								disabled={(!draft.trim() && pendingAttachments.length === 0) ||
+								disabled={(!editingMessage && !draft.trim() && pendingAttachments.length === 0) ||
 									sending ||
 									uploadingCount > 0 ||
 									xmppState.status !== 'online'}
