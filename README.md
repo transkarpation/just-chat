@@ -27,6 +27,8 @@ chat management, ejabberd (XMPP over WebSocket) for real-time messaging.
 - **Mentions** — `@`-autocomplete in the composer, sent as XEP-0372
   references next to a plain-text body; highlighted rendering, louder
   notification sound and a "mentioned you" browser notification.
+- **Reactions** — emoji reactions on any message (XEP-0444); a hover picker
+  and reaction chips with per-emoji counts. See [Reactions](#reactions).
 - **Message deletion** — own messages, via the Ethora `<delete>` stanza;
   MAM tombstones are filtered out of history.
 - **Presence** — online occupants per room, message sounds (quiet tick for
@@ -102,6 +104,10 @@ for interop with official Ethora clients:
   the room reflects it to everyone and MAM keeps a tombstone.
 - **Mentions** = XEP-0372 `<reference type="mention" begin end uri="xmpp:…"/>`
   elements; they survive both live reflection and the MAM archive.
+- **Reactions** = XEP-0444 `<reactions id="<archive-id>"><reaction>…</reaction></reactions>`
+  carrying a reactor's full emoji set (an empty element clears it). Archived
+  as **standalone entries**, not a rewrite of the target — see
+  [Reactions](#reactions).
 - **Delivery receipts** = bodyless groupchat message with
   `<received xmlns="urn:xmpp:receipts" id="<archive-id>"/>` and a `<store>`
   hint — see [Delivery & read receipts](#delivery--read-receipts).
@@ -156,6 +162,48 @@ Client handling:
   PhotoSwipe gallery). Non-image files are listed below the images with a
   download button that fetches the file as a blob (no tab flash);
   video/audio play inline. The caption renders under the attachments.
+
+## Reactions
+
+Emoji reactions follow XEP-0444, sent as a groupchat stanza referencing the
+target message's archive id. The `<reactions>` element carries the reactor's
+**complete** current set of reactions (adding or removing one re-sends the
+whole set); an empty element clears them. The emoji travel as shortcodes
+(`fire`, `heart`, …); a `<store>` hint archives the stanza.
+
+```xml
+<message id="message-reaction:1783874025962" type="groupchat" to="room@conference…">
+  <reactions id="1783612069420353" from="…@xmpp…" xmlns="urn:xmpp:reactions:0">
+    <reaction>fire</reaction>
+  </reactions>
+  <data senderFirstName="Emily" senderLastName="Johnson"/>
+  <store xmlns="urn:xmpp:hints"/>
+</message>
+
+<!-- removing all of this user's reactions: an empty <reactions/> -->
+<reactions id="1783612069420353" from="…@xmpp…" xmlns="urn:xmpp:reactions:0"/>
+```
+
+Verified live against the QA ejabberd: the room reflects the reaction to every
+occupant, and MAM archives **each reaction change as its own standalone entry**
+(with its own `<stanza-id>`) — it does *not* rewrite the target message. So the
+current reactions are reconstructed by replaying those entries.
+
+Client handling:
+
+- **State**: per message, a map `reactor nickname → their emoji shortcodes`.
+  Because MAM keeps every change as a separate, out-of-order-loadable entry,
+  each reactor's set is applied **last-writer-wins** by the reaction stanza's
+  own archive id, so paging older history never resurrects a stale set. A
+  reaction whose target message is not loaded yet is parked (like a receipt)
+  and applied when the message arrives.
+- **Sending** (`setRoomReaction`): clicking a chip or a picker emoji toggles it
+  in the user's set and sends the new full set; applied optimistically, then
+  the server echo (with a real archive id) overrides it.
+- **Rendering**: a hover 🙂 picker on every message; chips under the bubble
+  show each emoji with a count, the user's own reactions highlighted, and the
+  reactors' names in the tooltip. Unknown incoming shortcodes render as their
+  raw text, so reactions from other clients degrade gracefully.
 
 ## Delivery & read receipts
 
