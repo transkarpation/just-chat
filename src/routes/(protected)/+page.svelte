@@ -36,6 +36,7 @@
 		sendMediaMessage,
 		deleteRoomMessage,
 		editRoomMessage,
+		setRoomReaction,
 		leaveRoom,
 		subscribeToRoom
 	} from '$lib/xmpp/client';
@@ -53,6 +54,23 @@
 	let showOnlineList = $state(false);
 	let showMembersList = $state(false);
 	let membersSearch = $state('');
+	// id of the message whose reaction picker is open (null = none)
+	let reactionPickerFor = $state<string | null>(null);
+
+	// the reaction palette: emoji shortcodes on the wire (XEP-0444), mapped to
+	// the emoji for display. Unknown incoming codes fall back to their text.
+	const REACTION_CODES = ['thumbsup', 'heart', 'joy', 'open_mouth', 'cry', 'fire'];
+	const REACTION_EMOJI: Record<string, string> = {
+		thumbsup: '👍',
+		heart: '❤️',
+		joy: '😂',
+		open_mouth: '😮',
+		cry: '😢',
+		fire: '🔥'
+	};
+	function emojiFor(code: string): string {
+		return REACTION_EMOJI[code] ?? code;
+	}
 
 	const filteredMembers = $derived.by(() => {
 		if (!selectedChat) return [];
@@ -243,6 +261,7 @@
 		selectedRoom = roomName;
 		showOnlineList = false;
 		showMembersList = false;
+		reactionPickerFor = null;
 		membersSearch = '';
 		sendError = '';
 		joinError = '';
@@ -316,6 +335,47 @@
 		const member = chat.members.find((m) => m.xmppUsername === message.nickname);
 		if (member) return member.profileImage || undefined;
 		return userLookupState.records[message.nickname]?.profileImage || undefined;
+	}
+
+	/** aggregate a message's per-user reactions into chips (emoji + count),
+	 * most-reacted first, flagging the ones this user set */
+	function reactionSummary(
+		message: ChatMessage
+	): { code: string; emoji: string; count: number; mine: boolean; nicks: string[] }[] {
+		if (!message.reactions) return [];
+		const byCode = new Map<string, string[]>();
+		for (const [nick, codes] of Object.entries(message.reactions)) {
+			for (const code of codes) {
+				const nicks = byCode.get(code) ?? [];
+				nicks.push(nick);
+				byCode.set(code, nicks);
+			}
+		}
+		return [...byCode.entries()]
+			.map(([code, nicks]) => ({
+				code,
+				emoji: emojiFor(code),
+				count: nicks.length,
+				mine: nicks.includes(myNickname),
+				nicks
+			}))
+			.sort((a, b) => b.count - a.count);
+	}
+
+	/** toggle one of this user's reactions on a message and send the new full
+	 * set (XEP-0444 replaces the whole per-user set each time) */
+	async function toggleReaction(message: ChatMessage, code: string): Promise<void> {
+		reactionPickerFor = null;
+		if (!selectedRoom || message.pending) return;
+		const mineNow = message.reactions?.[myNickname] ?? [];
+		const next = mineNow.includes(code)
+			? mineNow.filter((c) => c !== code)
+			: [...mineNow, code];
+		try {
+			await setRoomReaction(selectedRoom, message.id, next);
+		} catch (err) {
+			console.error('reaction failed:', err);
+		}
 	}
 
 	// resolve senders that are missing from the open chat's member list
@@ -1471,10 +1531,49 @@
 							{selectedMessages?.loading ? 'Loading messages…' : 'No messages in this chat yet.'}
 						</p>
 					{:else}
+						{#snippet reactButton(message: ChatMessage, mine: boolean)}
+							<div class="relative self-center">
+								<button
+									type="button"
+									onclick={() =>
+										(reactionPickerFor = reactionPickerFor === message.id ? null : message.id)}
+									aria-label="Add reaction"
+									title="Add reaction"
+									class="rounded-md p-1 text-sm leading-none text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-gray-200 hover:text-indigo-600 focus-visible:opacity-100 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-indigo-400"
+								>
+									🙂
+								</button>
+								{#if reactionPickerFor === message.id}
+									<button
+										type="button"
+										class="fixed inset-0 z-10 cursor-default"
+										aria-label="Close reaction picker"
+										onclick={() => (reactionPickerFor = null)}
+									></button>
+									<div
+										class="absolute bottom-full z-20 mb-1 flex gap-0.5 rounded-full border border-gray-200 bg-white px-1.5 py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800 {mine
+											? 'right-0'
+											: 'left-0'}"
+									>
+										{#each REACTION_CODES as code (code)}
+											<button
+												type="button"
+												onclick={() => toggleReaction(message, code)}
+												title={code}
+												class="rounded-full px-1 text-xl leading-none hover:bg-gray-100 dark:hover:bg-gray-700"
+											>
+												{emojiFor(code)}
+											</button>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/snippet}
 						<ul class="space-y-4">
 							{#each selectedMessages.messages as message (message.id)}
 								{@const mine = message.nickname === myNickname}
 								{@const avatar = senderAvatar(selectedChat, message)}
+								{@const reactions = reactionSummary(message)}
 								<li class="group flex items-end gap-2 {mine ? 'justify-end' : 'justify-start'}">
 									{#if mine && !message.pending}
 										{#if !message.media}
@@ -1497,8 +1596,11 @@
 										>
 											🗑
 										</button>
+										{@render reactButton(message, mine)}
 									{/if}
-									{#if !mine}
+									<!-- no per-message avatar in private chats: the opponent's
+									     avatar already sits in the chat header -->
+									{#if !mine && selectedChat.type !== 'private'}
 										{#if avatar}
 											<img
 												src={avatar}
@@ -1674,6 +1776,24 @@
 											</p>
 										{/if}
 									</div>
+									{#if reactions.length > 0}
+										<div class="mt-1 flex flex-wrap gap-1 {mine ? 'justify-end' : ''}">
+											{#each reactions as r (r.code)}
+												<button
+													type="button"
+													onclick={() => toggleReaction(message, r.code)}
+													disabled={message.pending}
+													title={r.nicks.map((n) => nickToName(selectedChat, n)).join(', ')}
+													class="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs leading-none {r.mine
+														? 'border-indigo-300 bg-indigo-100 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-200'
+														: 'border-gray-200 bg-gray-100 text-gray-600 hover:bg-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'}"
+												>
+													<span class="text-sm">{r.emoji}</span>
+													<span class="tabular-nums">{r.count}</span>
+												</button>
+											{/each}
+										</div>
+									{/if}
 									{#if mine}
 										<!-- delivery status: ✓ when the server echoed the message
 										     back, gray ✓✓ when at least one other member's client
@@ -1698,6 +1818,9 @@
 										</span>
 									{/if}
 									</div>
+									{#if !mine && !message.pending}
+										{@render reactButton(message, mine)}
+									{/if}
 								</li>
 							{/each}
 						</ul>

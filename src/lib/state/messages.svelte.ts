@@ -32,6 +32,13 @@ export interface ChatMessage {
 	mentions?: MessageMention[];
 	/** body was edited via a <replace> stanza (MAM marks these <replaced>) */
 	edited?: boolean;
+	/** reactions per reactor nick → their current set of emoji shortcodes.
+	 * XEP-0444: each <reactions> stanza carries that user's FULL set, so this
+	 * is a replace-per-user map, not an append log. */
+	reactions?: Record<string, string[]>;
+	/** archive id of the <reactions> stanza that last set each reactor's set —
+	 * lets out-of-order updates (MAM paging) apply with last-writer-wins */
+	reactionAt?: Record<string, string>;
 	/** own message shown optimistically, before the server echoed it back;
 	 * `id` is a local placeholder, not an archive id */
 	pending?: boolean;
@@ -52,6 +59,9 @@ export interface RoomMessages {
 	 * archived after their message, so newer MAM pages can reference messages
 	 * from older, not-yet-loaded pages) — applied when the message arrives */
 	pendingReceipts: Record<string, string[]>;
+	/** reactions whose target message is not loaded yet, keyed by target id —
+	 * applied when the message arrives (same reason as pendingReceipts) */
+	pendingReactions: Record<string, { nick: string; codes: string[]; at: string }[]>;
 	/** read watermark per nickname: the archive id of the newest message that
 	 * user has displayed — every message with id <= watermark counts as read
 	 * by them (XEP-0333 semantics: a marker covers everything before it) */
@@ -70,6 +80,7 @@ export function ensureRoom(roomName: string): RoomMessages {
 			complete: false,
 			loading: false,
 			pendingReceipts: {},
+			pendingReactions: {},
 			displayedUpTo: {}
 		};
 	}
@@ -86,12 +97,17 @@ export function prependMessages(
 	const room = ensureRoom(roomName);
 	const known = new Set(room.messages.map((m) => m.id));
 	const fresh = incoming.filter((m) => !known.has(m.id));
-	// receipts from newer pages may have been waiting for these messages
+	// receipts / reactions from newer pages may have been waiting for these
 	for (const message of fresh) {
 		const waiting = room.pendingReceipts[message.id];
 		if (waiting) {
 			message.receivedBy = [...new Set([...(message.receivedBy ?? []), ...waiting])];
 			delete room.pendingReceipts[message.id];
+		}
+		const reactions = room.pendingReactions[message.id];
+		if (reactions) {
+			for (const r of reactions) setMessageReaction(message, r.nick, r.codes, r.at);
+			delete room.pendingReactions[message.id];
 		}
 	}
 	room.messages = [...fresh, ...room.messages];
@@ -174,6 +190,50 @@ export function confirmMessage(
 	}
 	room.messages = room.messages.map((m, i) => (i === index ? confirmed : m));
 	return true;
+}
+
+/**
+ * Set one reactor's full reaction set on a loaded message, honouring
+ * last-writer-wins: an update older (by archive id) than the one already
+ * applied for that reactor is ignored, so out-of-order MAM pages are safe.
+ * An empty `codes` clears the reactor's reactions.
+ */
+function setMessageReaction(
+	message: ChatMessage,
+	nick: string,
+	codes: string[],
+	at: string
+): void {
+	const current = message.reactionAt?.[nick];
+	if (current && compareArchiveIds(at, current) < 0) return;
+	const reactions = { ...(message.reactions ?? {}) };
+	if (codes.length > 0) reactions[nick] = codes;
+	else delete reactions[nick];
+	message.reactions = Object.keys(reactions).length > 0 ? reactions : undefined;
+	message.reactionAt = { ...(message.reactionAt ?? {}), [nick]: at };
+}
+
+/**
+ * Apply a reaction update (XEP-0444 <reactions> stanza). `at` is the reaction
+ * stanza's own archive id (its version). If the target message is not loaded
+ * yet, the update is parked and applied when the message arrives.
+ */
+export function applyReaction(
+	roomName: string,
+	targetId: string,
+	nick: string,
+	codes: string[],
+	at: string
+): void {
+	const room = ensureRoom(roomName);
+	const message = room.messages.find((m) => m.id === targetId);
+	if (!message) {
+		const waiting = room.pendingReactions[targetId] ?? [];
+		waiting.push({ nick, codes, at });
+		room.pendingReactions[targetId] = waiting;
+		return;
+	}
+	setMessageReaction(message, nick, codes, at);
 }
 
 /**

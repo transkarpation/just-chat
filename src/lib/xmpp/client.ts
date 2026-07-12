@@ -19,6 +19,7 @@ import {
 	compareArchiveIds,
 	removeMessage,
 	replaceMessageBody,
+	applyReaction,
 	forgetRoom,
 	type ChatMessage,
 	type MessageMedia,
@@ -154,6 +155,19 @@ export async function connectAndJoinRooms(
 		const replace = stanza.getChild('replace');
 		if (replace?.attrs.id) {
 			replaceMessageBody(room, String(replace.attrs.id), String(replace.attrs.text ?? ''));
+			return;
+		}
+		// a reflected reaction (bodyless): <reactions id> carries the reactor's
+		// FULL emoji set for that message (empty = cleared); its own <stanza-id>
+		// is the version used to resolve out-of-order updates
+		const reactions = stanza.getChild('reactions', 'urn:xmpp:reactions:0');
+		if (reactions?.attrs.id) {
+			const codes = reactions
+				.getChildren('reaction')
+				.map((r) => String(r.text() ?? '').trim())
+				.filter(Boolean);
+			const at = stanza.getChild('stanza-id', 'urn:xmpp:sid:0')?.attrs.id ?? `live-${Date.now()}`;
+			applyReaction(room, String(reactions.attrs.id), nick, codes, String(at));
 			return;
 		}
 		// a delivery receipt (bodyless): someone's client confirmed receiving
@@ -303,6 +317,8 @@ interface HistoryPage {
 	receipts: { messageId: string; nickname: string }[];
 	/** read markers found in this page */
 	markers: { messageId: string; nickname: string }[];
+	/** reaction updates found in this page (archive entries of their own) */
+	reactions: { targetId: string; nickname: string; codes: string[]; at: string }[];
 	/** archive id of the first (oldest) message in this page */
 	first: string | null;
 	/** true when the page reaches the beginning of the archive */
@@ -326,6 +342,7 @@ async function fetchRoomHistory(
 	const collected: ChatMessage[] = [];
 	const receipts: HistoryPage['receipts'] = [];
 	const markers: HistoryPage['markers'] = [];
+	const reactions: HistoryPage['reactions'] = [];
 
 	// archived messages arrive as separate stanzas correlated by queryid,
 	// while the awaited IQ result only carries the paging metadata
@@ -351,6 +368,21 @@ async function fetchRoomHistory(
 			markers.push({
 				messageId: String(marker.attrs.id),
 				nickname: String(message.attrs.from ?? '').split('/')[1] ?? ''
+			});
+			return;
+		}
+		// archived reactions — bodyless entries; each is the reactor's full set
+		// at that point in time, versioned by its own archive id
+		const reactionEl = message.getChild('reactions', 'urn:xmpp:reactions:0');
+		if (reactionEl?.attrs.id) {
+			reactions.push({
+				targetId: String(reactionEl.attrs.id),
+				nickname: String(message.attrs.from ?? '').split('/')[1] ?? '',
+				codes: reactionEl
+					.getChildren('reaction')
+					.map((r) => String(r.text() ?? '').trim())
+					.filter(Boolean),
+				at: String(result.attrs.id)
 			});
 			return;
 		}
@@ -397,6 +429,7 @@ async function fetchRoomHistory(
 			messages: collected,
 			receipts,
 			markers,
+			reactions,
 			first: set?.getChildText('first') ?? null,
 			complete: fin?.attrs.complete === 'true'
 		};
@@ -419,6 +452,9 @@ export async function loadLastMessages(roomNames: string[]): Promise<void> {
 			}
 			for (const marker of page.markers) {
 				applyDisplayedMarker(roomName, marker.nickname, marker.messageId);
+			}
+			for (const reaction of page.reactions) {
+				applyReaction(roomName, reaction.targetId, reaction.nickname, reaction.codes, reaction.at);
 			}
 			// catch up on deliveries that happened while we were offline: any
 			// loaded message from someone else without our receipt gets one now.
@@ -453,6 +489,9 @@ export async function loadOlderMessages(roomName: string, count = 20): Promise<v
 		}
 		for (const marker of page.markers) {
 			applyDisplayedMarker(roomName, marker.nickname, marker.messageId);
+		}
+		for (const reaction of page.reactions) {
+			applyReaction(roomName, reaction.targetId, reaction.nickname, reaction.codes, reaction.at);
 		}
 	} finally {
 		room.loading = false;
@@ -800,6 +839,45 @@ export async function editRoomMessage(
 			xml('replace', { id: messageId, text })
 		)
 	);
+}
+
+/**
+ * Set this user's reactions on a message (XEP-0444). `codes` is the FULL set
+ * of emoji shortcodes to keep — an empty array clears the reactions. The room
+ * reflects it to every occupant and the <store> hint archives it (as its own
+ * entry, not a rewrite of the target — verified live). Applied optimistically
+ * with a synthetic version the real echo then overrides.
+ */
+export async function setRoomReaction(
+	roomName: string,
+	targetId: string,
+	codes: string[]
+): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') {
+		throw new Error('XMPP is not connected');
+	}
+	const firstName = typeof localStorage !== 'undefined' ? (localStorage.getItem('firstName') ?? '') : '';
+	const lastName = typeof localStorage !== 'undefined' ? (localStorage.getItem('lastName') ?? '') : '';
+	await xmpp.send(
+		xml(
+			'message',
+			{
+				id: `message-reaction:${Date.now()}`,
+				type: 'groupchat',
+				to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`
+			},
+			xml(
+				'reactions',
+				{ id: targetId, from: `${currentUser}@${PUBLIC_XMPP_HOST}`, xmlns: 'urn:xmpp:reactions:0' },
+				...codes.map((code) => xml('reaction', {}, code))
+			),
+			xml('data', { senderFirstName: firstName, senderLastName: lastName }),
+			xml('store', { xmlns: 'urn:xmpp:hints' })
+		)
+	);
+	// show it right away; the reflection carries a real (larger) archive id and
+	// harmlessly re-applies the same set
+	applyReaction(roomName, targetId, currentUser, codes, String(Date.now() * 1000));
 }
 
 export async function disconnectXmpp(): Promise<void> {
