@@ -272,14 +272,26 @@
 		}
 	}
 
+	// the other participant of a private (1-1) chat — undefined for group chats
+	function privateOther(chat: Chat) {
+		if (chat.type !== 'private') return undefined;
+		return chat.members.find((m) => m.xmppUsername !== myNickname);
+	}
+
 	// the server-side title of a private (1-1) chat is unreliable — show
 	// the other participant's name instead
 	function chatTitle(chat: Chat): string {
-		if (chat.type === 'private') {
-			const other = chat.members.find((m) => m.xmppUsername !== myNickname);
-			if (other) return `${other.firstName} ${other.lastName}`.trim();
-		}
+		const other = privateOther(chat);
+		if (other) return `${other.firstName} ${other.lastName}`.trim();
 		return chat.title;
+	}
+
+	// avatar for a chat row: the opponent's picture for private chats, the
+	// room picture otherwise (undefined falls back to an initial)
+	function chatAvatar(chat: Chat): string | undefined {
+		const other = privateOther(chat);
+		if (other) return other.profileImage || undefined;
+		return chat.picture || undefined;
 	}
 
 	function nickToName(chat: Chat, nickname: string): string {
@@ -1095,9 +1107,9 @@
 										? 'bg-indigo-50 dark:bg-indigo-950'
 										: 'hover:bg-gray-50 dark:hover:bg-gray-800'}"
 								>
-									{#if chat.picture}
+									{#if chatAvatar(chat)}
 										<img
-											src={chat.picture}
+											src={chatAvatar(chat)}
 											alt=""
 											class="h-10 w-10 shrink-0 rounded-full object-cover"
 										/>
@@ -1111,6 +1123,19 @@
 
 									<div class="min-w-0 flex-1">
 										<div class="flex items-center gap-1.5">
+											{#if chat.type === 'public'}
+												<span
+													class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
+													style="font-size: 18px"
+													title="Public chat">public</span
+												>
+											{:else if chat.type === 'group'}
+												<span
+													class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
+													style="font-size: 18px"
+													title="Group chat">group</span
+												>
+											{/if}
 											<p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{chatTitle(chat)}</p>
 											{#if chat.createdBy && chat.createdBy === myUserId}
 												<span
@@ -1172,35 +1197,101 @@
 					>
 						←
 					</button>
+					{#if selectedChat.type === 'private'}
+						<!-- private chat: the opponent's avatar with an online dot,
+						     no member/online counts -->
+						{@const other = privateOther(selectedChat)}
+						{@const online = other && xmppState.occupants[selectedChat.name]?.includes(other.xmppUsername)}
+						<div class="relative shrink-0">
+							{#if other?.profileImage}
+								<img
+									src={other.profileImage}
+									alt=""
+									class="h-9 w-9 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+								/>
+							{:else}
+								<span
+									class="flex h-9 w-9 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+								>
+									{chatTitle(selectedChat).charAt(0).toUpperCase()}
+								</span>
+							{/if}
+							{#if online}
+								<span
+									title="Online"
+									class="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-white bg-green-500 dark:border-gray-900"
+								></span>
+							{/if}
+						</div>
+					{:else}
+						<!-- group / public chat: the room avatar -->
+						<div class="shrink-0">
+							{#if chatAvatar(selectedChat)}
+								<img
+									src={chatAvatar(selectedChat)}
+									alt=""
+									class="h-9 w-9 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+								/>
+							{:else}
+								<span
+									class="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
+								>
+									{chatTitle(selectedChat).charAt(0).toUpperCase()}
+								</span>
+							{/if}
+						</div>
+					{/if}
 					<div class="relative min-w-0 flex-1">
-						<h3 class="truncate font-semibold text-gray-900 dark:text-gray-100">{chatTitle(selectedChat)}</h3>
-						<p class="text-xs text-gray-500 dark:text-gray-400">
-							<button
-								type="button"
-								onclick={() => {
-									showMembersList = !showMembersList;
-									showOnlineList = false;
-									membersSearch = '';
-								}}
-								class="font-medium underline-offset-2 hover:underline"
-								aria-expanded={showMembersList}
-							>
-								{selectedChat.members.length}
-								{selectedChat.members.length === 1 ? 'member' : 'members'}
-							</button>
-							<span class="mx-1">·</span>
-							<button
-								type="button"
-								onclick={() => {
-									showOnlineList = !showOnlineList;
-									showMembersList = false;
-								}}
-								class="font-medium text-green-600 underline-offset-2 hover:underline dark:text-green-400"
-								aria-expanded={showOnlineList}
-							>
-								{xmppState.occupants[selectedChat.name]?.length ?? 0} online
-							</button>
-						</p>
+						<h3 class="flex items-center gap-1.5 font-semibold text-gray-900 dark:text-gray-100">
+							{#if selectedChat.type === 'public'}
+								<span
+									class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
+									style="font-size: 18px"
+									title="Public chat">public</span
+								>
+							{:else if selectedChat.type === 'group'}
+								<span
+									class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
+									style="font-size: 18px"
+									title="Group chat">group</span
+								>
+							{/if}
+							<span class="truncate">{chatTitle(selectedChat)}</span>
+						</h3>
+						{#if selectedChat.type === 'private'}
+							{@const other = privateOther(selectedChat)}
+							{#if other && xmppState.occupants[selectedChat.name]?.includes(other.xmppUsername)}
+								<p class="text-xs font-medium text-green-600 dark:text-green-400">Online</p>
+							{/if}
+						{:else}
+							<p class="text-xs text-gray-500 dark:text-gray-400">
+								<button
+									type="button"
+									onclick={() => {
+										showMembersList = !showMembersList;
+										showOnlineList = false;
+										membersSearch = '';
+									}}
+									class="font-medium underline-offset-2 hover:underline"
+									aria-expanded={showMembersList}
+								>
+									{selectedChat.members.length}
+									{selectedChat.members.length === 1 ? 'member' : 'members'}
+								</button>
+								<span class="mx-1">·</span>
+								<button
+									type="button"
+									onclick={() => {
+										showOnlineList = !showOnlineList;
+										showMembersList = false;
+									}}
+									class="font-medium text-green-600 underline-offset-2 hover:underline dark:text-green-400"
+									aria-expanded={showOnlineList}
+								>
+									{xmppState.occupants[selectedChat.name]?.length ?? 0} online
+								</button>
+							</p>
+						{/if}
 
 						{#if showOnlineList || showMembersList}
 							<!-- click-away backdrop -->
