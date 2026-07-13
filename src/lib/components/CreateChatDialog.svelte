@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Dialog, Tabs } from 'bits-ui';
 	import { createChat, createPrivateChat, type ChatMember } from '$lib/api/chats';
+	import { uploadFile } from '$lib/api/files';
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { chatsState } from '$lib/state/chats.svelte';
 	import { xmppState } from '$lib/state/xmpp.svelte';
@@ -25,6 +26,27 @@
 	let creating = $state(false);
 	let createError = $state('');
 	let memberTab = $state('all');
+
+	// optional room picture (public/group only) — uploaded on submit
+	let avatarFile = $state<File | null>(null);
+	let avatarPreview = $state('');
+	let avatarInput = $state<HTMLInputElement | null>(null);
+
+	function pickAvatar(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = ''; // so picking the same file again still fires change
+		if (!file || !file.type.startsWith('image/')) return;
+		if (avatarPreview) URL.revokeObjectURL(avatarPreview);
+		avatarFile = file;
+		avatarPreview = URL.createObjectURL(file);
+	}
+
+	function clearAvatar() {
+		if (avatarPreview) URL.revokeObjectURL(avatarPreview);
+		avatarFile = null;
+		avatarPreview = '';
+	}
 
 	// a direct chat has exactly one recipient — picking someone replaces
 	// the previous pick instead of accumulating
@@ -91,6 +113,11 @@
 		createError = '';
 		let created;
 		try {
+			// the room picture goes up first — the create payload takes a URL
+			let picture = '';
+			if (chatType !== 'private' && avatarFile) {
+				picture = (await uploadFile(avatarFile)).location;
+			}
 			// /v1/chats/private is idempotent — an existing 1-1 chat with the
 			// same person is returned instead of creating a duplicate
 			created =
@@ -99,7 +126,8 @@
 					: await createChat({
 							title: title.trim(),
 							type: chatType,
-							members: selectedMembers
+							members: selectedMembers,
+							picture
 						});
 		} catch (err) {
 			console.error('chat create failed:', err);
@@ -113,6 +141,7 @@
 		title = '';
 		chatType = 'public';
 		selectedMembers = [];
+		clearAvatar();
 		creating = false;
 		open = false;
 		try {
@@ -142,12 +171,54 @@
 					<p class="mb-2 text-xs text-red-600 dark:text-red-400" role="alert">{createError}</p>
 				{/if}
 				{#if chatType !== 'private'}
-					<input
-						type="text"
-						bind:value={title}
-						placeholder="Chat title"
-						class="block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
-					/>
+					<div class="flex items-center gap-3">
+						<input
+							bind:this={avatarInput}
+							type="file"
+							accept="image/*"
+							onchange={pickAvatar}
+							class="hidden"
+						/>
+						<div class="relative shrink-0">
+							<button
+								type="button"
+								onclick={() => avatarInput?.click()}
+								title="Choose a chat picture"
+								aria-label="Choose a chat picture"
+								class="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full ring-1 ring-inset {avatarPreview
+									? 'ring-gray-300 dark:ring-gray-700'
+									: 'bg-gray-100 text-gray-400 ring-gray-300 hover:bg-gray-200 hover:text-gray-500 dark:bg-gray-800 dark:text-gray-500 dark:ring-gray-700 dark:hover:bg-gray-700'}"
+							>
+								{#if avatarPreview}
+									<img src={avatarPreview} alt="" class="h-full w-full object-cover" />
+								{:else}
+									<!-- camera icon -->
+									<svg viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5" aria-hidden="true">
+										<path
+											d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM9 3 7.17 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.17L15 3H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"
+										/>
+									</svg>
+								{/if}
+							</button>
+							{#if avatarPreview}
+								<button
+									type="button"
+									onclick={clearAvatar}
+									title="Remove the picture"
+									aria-label="Remove the picture"
+									class="absolute -top-1 -right-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-gray-700 text-[10px] leading-none text-white shadow hover:bg-gray-900 dark:bg-gray-600 dark:hover:bg-gray-500"
+								>
+									✕
+								</button>
+							{/if}
+						</div>
+						<input
+							type="text"
+							bind:value={title}
+							placeholder="Chat title"
+							class="block w-full min-w-0 flex-1 rounded-md border-0 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
+						/>
+					</div>
 				{/if}
 
 				<!-- min-w-0 overrides the fieldset default min-width: min-content,
