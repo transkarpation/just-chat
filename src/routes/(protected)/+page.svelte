@@ -300,19 +300,27 @@
 		if (window.matchMedia('(min-width: 768px)').matches) {
 			composerEl?.focus();
 		}
-		try {
-			await loadOlderMessages(roomName, 20);
-		} catch (err) {
-			console.error('history load failed:', err);
-			return;
-		}
-		// the first page just arrived; keep the newest messages in view
-		// unless the user has already switched to another chat
-		if (selectedRoom === roomName) {
+		// fetch history only when the room has little of it (first opening).
+		// Fetching on every activation both waited on a MAM roundtrip per
+		// switch and prepended 20 more messages each time, so the list grew
+		// without bound and switching chats re-rendered an ever-bigger DOM —
+		// that was the visible pause. Older pages stay one click away via
+		// the "Load older messages" button.
+		const room = messagesState.rooms[roomName];
+		if (!room || (room.messages.length < 20 && !room.complete)) {
+			try {
+				await loadOlderMessages(roomName, 20);
+			} catch (err) {
+				console.error('history load failed:', err);
+				return;
+			}
+			// the first page just arrived; keep the newest messages in view
+			// unless the user has already switched to another chat
+			if (selectedRoom !== roomName) return;
 			await scrollToBottom();
-			// the user is looking at the conversation now — mark it read
-			markRoomDisplayed(roomName);
 		}
+		// the user is looking at the conversation now — mark it read
+		if (selectedRoom === roomName) markRoomDisplayed(roomName);
 	}
 
 	// the other participant of a private (1-1) chat — undefined for group chats
