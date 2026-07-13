@@ -22,7 +22,7 @@ export interface LoginResponse {
 }
 
 export async function loginWithEmail(email: string, password: string): Promise<LoginResponse> {
-	const { data } = await api.post<LoginResponse>('/v1/users/login-with-email', {
+	const { data } = await api.post<LoginResponse>('/v2/users/login-with-email', {
 		email,
 		password,
 		appId: PUBLIC_APP_ID
