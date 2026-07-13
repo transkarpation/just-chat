@@ -43,6 +43,28 @@
 		}
 	});
 
+	// render (and fetch avatars for) only a window of each list — mounting
+	// 1000+ <img>s at once trips the avatar host's rate limit (429). More
+	// rows appear as the list scrolls.
+	const PAGE = 10;
+	let membersShown = $state(PAGE);
+	let candidatesShown = $state(PAGE);
+	$effect(() => {
+		void open;
+		membersShown = PAGE;
+	});
+	$effect(() => {
+		// new tab or search = a different list, restart its window
+		void open;
+		void memberTab;
+		void search;
+		candidatesShown = PAGE;
+	});
+	function growOnScroll(event: Event, grow: () => void) {
+		const el = event.currentTarget as HTMLElement;
+		if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) grow();
+	}
+
 	function memberName(member: ChatMember): string {
 		return `${member.firstName} ${member.lastName}`.trim();
 	}
@@ -140,14 +162,18 @@
 			</h4>
 			<ul
 				class="mt-1.5 max-h-44 divide-y divide-gray-100 overflow-y-auto rounded-md ring-1 ring-inset ring-gray-200 dark:divide-gray-800 dark:ring-gray-700"
+				onscroll={(e) =>
+					growOnScroll(e, () => (membersShown = Math.min(membersShown + PAGE, chat.members.length)))}
 			>
-				{#each chat.members as member (member.xmppUsername)}
+				{#each chat.members.slice(0, membersShown) as member (member.xmppUsername)}
 					{@const mine = member.xmppUsername === myNickname}
 					<li class="flex items-center gap-2.5 px-3 py-2 text-sm">
 						{#if member.profileImage}
 							<img
 								src={member.profileImage}
 								alt=""
+								loading="lazy"
+								decoding="async"
 								class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
 							/>
 						{:else}
@@ -208,8 +234,13 @@
 				</Tabs.Root>
 				<div
 					class="mt-1.5 max-h-44 divide-y divide-gray-100 overflow-y-auto rounded-md ring-1 ring-inset ring-gray-200 dark:divide-gray-800 dark:ring-gray-700"
+					onscroll={(e) =>
+						growOnScroll(
+							e,
+							() => (candidatesShown = Math.min(candidatesShown + PAGE, visibleCandidates.length))
+						)}
 				>
-					{#each visibleCandidates as member (member.xmppUsername)}
+					{#each visibleCandidates.slice(0, candidatesShown) as member (member.xmppUsername)}
 						<label
 							class="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
 						>
@@ -224,6 +255,8 @@
 								<img
 									src={member.profileImage}
 									alt=""
+									loading="lazy"
+									decoding="async"
 									class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
 								/>
 							{:else}

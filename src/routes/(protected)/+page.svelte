@@ -81,6 +81,23 @@
 			`${m.firstName} ${m.lastName}`.toLowerCase().includes(query)
 		);
 	});
+	// render (and thus fetch avatars for) only a slice of the member list —
+	// with 1000+ members, mounting every <img> at once fires a request storm
+	// and the avatar CDN answers 429. More rows appear as the list scrolls.
+	const MEMBERS_PAGE = 10;
+	let membersVisibleCount = $state(MEMBERS_PAGE);
+	$effect(() => {
+		// reopening the dropdown or typing a search restarts the window
+		void showMembersList;
+		void membersSearch;
+		membersVisibleCount = MEMBERS_PAGE;
+	});
+	function growMembersOnScroll(event: Event) {
+		const el = event.currentTarget as HTMLElement;
+		if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) {
+			membersVisibleCount = Math.min(membersVisibleCount + MEMBERS_PAGE, filteredMembers.length);
+		}
+	}
 	let draft = $state('');
 	let sending = $state(false);
 	let sendError = $state('');
@@ -1407,14 +1424,16 @@
 										class="block w-full rounded-md border-0 bg-white px-2.5 py-1 text-sm text-gray-900 ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 dark:bg-gray-900 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-500 dark:focus:ring-indigo-500"
 									/>
 								</div>
-								<div class="min-h-0 flex-1 overflow-y-auto">
-								{#each filteredMembers as member (member.xmppUsername)}
+								<div class="min-h-0 flex-1 overflow-y-auto" onscroll={growMembersOnScroll}>
+								{#each filteredMembers.slice(0, membersVisibleCount) as member (member.xmppUsername)}
 									{@const name = `${member.firstName} ${member.lastName}`.trim()}
 									<div class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200">
 										{#if member.profileImage}
 											<img
 												src={member.profileImage}
 												alt=""
+												loading="lazy"
+												decoding="async"
 												class="relative h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
 											/>
 										{:else}
