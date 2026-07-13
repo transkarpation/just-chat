@@ -33,6 +33,37 @@ let currentUser = '';
 let mamQueryCounter = 0;
 const handledInvites = new Set<string>();
 
+const CHATSTATES_NS = 'http://jabber.org/protocol/chatstates';
+/** XEP-0085 chat states; only <composing/> means "typing", the rest stop it */
+const CHATSTATES = ['composing', 'paused', 'active', 'inactive', 'gone'];
+
+// a client that dies mid-composing never sends <paused/> — expire on our side
+const TYPING_EXPIRY_MS = 10_000;
+const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function setTypingNick(roomName: string, nick: string, on: boolean): void {
+	const key = `${roomName}/${nick}`;
+	const timer = typingTimers.get(key);
+	if (timer) clearTimeout(timer);
+	typingTimers.delete(key);
+	const current = xmppState.typing[roomName] ?? [];
+	if (on) {
+		if (!current.includes(nick)) xmppState.typing[roomName] = [...current, nick];
+		typingTimers.set(
+			key,
+			setTimeout(() => setTypingNick(roomName, nick, false), TYPING_EXPIRY_MS)
+		);
+	} else if (current.includes(nick)) {
+		xmppState.typing[roomName] = current.filter((n) => n !== nick);
+	}
+}
+
+function clearTypingState(): void {
+	for (const timer of typingTimers.values()) clearTimeout(timer);
+	typingTimers.clear();
+	xmppState.typing = {};
+}
+
 /**
  * Marker put into the <status> of the unavailable presence when THIS app
  * leaves a room voluntarily. On the wire a leave is otherwise identical to a
@@ -184,8 +215,20 @@ export async function connectAndJoinRooms(
 			applyDisplayedMarker(room, nick, String(displayed.attrs.id));
 			return;
 		}
+		// typing notification (XEP-0085 chat state as a bodyless groupchat
+		// stanza): <composing/> starts it, any other state stops it. Legacy
+		// Ethora clients attach <data fullName="…"> here — we ignore it and
+		// resolve the name from the room members instead, but keep sending it
+		// ourselves for their sake (see sendChatState).
+		const chatstate = CHATSTATES.find((s) => stanza.getChild(s, CHATSTATES_NS));
 		const body = stanza.getChildText('body');
+		if (chatstate && !body) {
+			if (nick !== currentUser) setTypingNick(room, nick, chatstate === 'composing');
+			return;
+		}
 		if (!body) return;
+		// a real message from them ends their typing right away
+		if (nick !== currentUser) setTypingNick(room, nick, false);
 		const mentions = mentionsMeta(stanza);
 		const message: ChatMessage = {
 			id:
@@ -253,6 +296,7 @@ export async function connectAndJoinRooms(
 		// reset the trackers, announce ourselves, then (re)join the rooms
 		xmppState.joinedRooms = [];
 		xmppState.occupants = {};
+		clearTypingState();
 		await xmpp!.send(xml('presence')); // initial presence
 		await joinRooms(roomNames, username);
 	});
@@ -572,6 +616,7 @@ function removeRoomLocally(roomName: string): void {
 	forgetRoom(roomName);
 	xmppState.joinedRooms = xmppState.joinedRooms.filter((room) => room !== roomName);
 	delete xmppState.occupants[roomName];
+	delete xmppState.typing[roomName];
 	handledInvites.delete(roomName);
 	// if the deleted room is open right now, leave it for the empty state
 	if (typeof location !== 'undefined') {
@@ -662,6 +707,40 @@ export function markRoomDisplayed(roomName: string): void {
 			console.error('sending read marker failed:', err);
 		}
 	})();
+}
+
+/**
+ * Tell the room this user started ('composing') or stopped ('paused') typing
+ * (XEP-0085 chat state as a bodyless groupchat stanza, not archived). The
+ * <data fullName> element is NOT read by this app — receivers resolve the
+ * name from the room members — but legacy Ethora clients display exactly
+ * that attribute, so it rides along for backwards compatibility.
+ * Best-effort: a lost state only means a missing/stale indicator.
+ */
+export async function sendChatState(
+	roomName: string,
+	state: 'composing' | 'paused'
+): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') return;
+	const firstName = localStorage.getItem('firstName') ?? '';
+	const lastName = localStorage.getItem('lastName') ?? '';
+	try {
+		await xmpp.send(
+			xml(
+				'message',
+				{
+					// legacy id convention: typing-<ts> / stop-typing-<ts>
+					id: `${state === 'composing' ? 'typing' : 'stop-typing'}-${Date.now()}`,
+					type: 'groupchat',
+					to: `${roomName}@${PUBLIC_XMPP_CONFERENCE}`
+				},
+				xml(state, { xmlns: CHATSTATES_NS }),
+				xml('data', { fullName: `${firstName} ${lastName}`.trim() || currentUser })
+			)
+		);
+	} catch (err) {
+		console.error('sending chat state failed:', err);
+	}
 }
 
 /**
@@ -893,4 +972,5 @@ export async function disconnectXmpp(): Promise<void> {
 	xmppState.status = 'offline';
 	xmppState.joinedRooms = [];
 	xmppState.occupants = {};
+	clearTypingState();
 }

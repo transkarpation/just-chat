@@ -15,5 +15,7 @@ export const xmppState = $state({
 	/** room names (local part of the room JID) we have confirmed presence in */
 	joinedRooms: [] as string[],
 	/** room name → nicknames of occupants currently online in that room */
-	occupants: {} as Record<string, string[]>
+	occupants: {} as Record<string, string[]>,
+	/** room name → nicknames currently typing there (never the own nick) */
+	typing: {} as Record<string, string[]>
 });

@@ -37,6 +37,7 @@
 		markRoomDisplayed,
 		sendRoomMessage,
 		sendMediaMessage,
+		sendChatState,
 		deleteRoomMessage,
 		editRoomMessage,
 		setRoomReaction,
@@ -101,6 +102,35 @@
 		}
 	}
 	let draft = $state('');
+	// outgoing typing notifications: <composing/> at most every RESEND ms while
+	// keystrokes keep coming, <paused/> after PAUSE ms of silence (or on send /
+	// chat switch). typingRoom remembers where the composing went so the paused
+	// lands in the same room even if the user has switched chats meanwhile.
+	const TYPING_RESEND_MS = 4000;
+	const TYPING_PAUSE_MS = 3000;
+	let typingRoom: string | null = null;
+	let typingSentAt = 0;
+	let typingPauseTimer: ReturnType<typeof setTimeout> | null = null;
+	function noteTyping() {
+		if (!selectedRoom || xmppState.status !== 'online') return;
+		if (typingRoom && typingRoom !== selectedRoom) stopTyping();
+		if (Date.now() - typingSentAt >= TYPING_RESEND_MS) {
+			typingRoom = selectedRoom;
+			typingSentAt = Date.now();
+			void sendChatState(selectedRoom, 'composing');
+		}
+		if (typingPauseTimer) clearTimeout(typingPauseTimer);
+		typingPauseTimer = setTimeout(stopTyping, TYPING_PAUSE_MS);
+	}
+	function stopTyping() {
+		if (typingPauseTimer) {
+			clearTimeout(typingPauseTimer);
+			typingPauseTimer = null;
+		}
+		if (typingRoom) void sendChatState(typingRoom, 'paused');
+		typingRoom = null;
+		typingSentAt = 0;
+	}
 	let sending = $state(false);
 	let sendError = $state('');
 	let showNewChat = $state(false);
@@ -282,6 +312,7 @@
 	}
 
 	async function activateRoom(roomName: string) {
+		stopTyping(); // an unsent composing belongs to the chat it started in
 		selectedRoom = roomName;
 		showOnlineList = false;
 		showMembersList = false;
@@ -359,6 +390,16 @@
 
 	function senderName(chat: Chat, message: ChatMessage): string {
 		return nickToName(chat, message.nickname);
+	}
+
+	// label for "who is typing", named from the room member list — the
+	// <data fullName> of the incoming stanza is legacy-only and not used here
+	function typingLabel(chat: Chat, nicks: string[]): string {
+		if (chat.type === 'private') return 'typing…';
+		const names = nicks.map((n) => nickToName(chat, n));
+		if (names.length === 1) return `${names[0]} is typing…`;
+		if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+		return `${names.length} people are typing…`;
 	}
 
 	/** avatar URL from /chats/my member data (or the user lookup for senders
@@ -1032,6 +1073,7 @@
 		}
 		sending = true;
 		sendError = '';
+		stopTyping(); // receivers clear the indicator on the message anyway
 		try {
 			if (attachments.length > 0) {
 				// the typed text rides along as the caption
@@ -1200,6 +1242,7 @@
 						{#each sortedChats as chat (chat._id)}
 							{@const last = lastMessage(chat.name)}
 							{@const selected = selectedRoom === chat.name}
+							{@const typingNicks = xmppState.typing[chat.name] ?? []}
 							<li>
 								<button
 									type="button"
@@ -1247,7 +1290,11 @@
 												{/if}
 											{/if}
 										</div>
-										{#if last}
+										{#if typingNicks.length > 0}
+											<p class="truncate text-xs font-medium text-indigo-600 dark:text-indigo-400">
+												{typingLabel(chat, typingNicks)}
+											</p>
+										{:else if last}
 											<p class="truncate text-xs text-gray-500 dark:text-gray-400">
 												<span class="font-medium">{senderName(chat, last)}:</span>
 												{last.media
@@ -1341,7 +1388,9 @@
 						</h3>
 						{#if selectedChat.type === 'private'}
 							{@const other = privateOther(selectedChat)}
-							{#if other && xmppState.occupants[selectedChat.name]?.includes(other.xmppUsername)}
+							{#if (xmppState.typing[selectedChat.name] ?? []).length > 0}
+								<p class="text-xs font-medium text-indigo-600 dark:text-indigo-400">typing…</p>
+							{:else if other && xmppState.occupants[selectedChat.name]?.includes(other.xmppUsername)}
 								<p class="text-xs font-medium text-green-600 dark:text-green-400">Online</p>
 							{/if}
 						{:else}
@@ -1371,6 +1420,12 @@
 								>
 									{xmppState.occupants[selectedChat.name]?.length ?? 0} online
 								</button>
+								{#if (xmppState.typing[selectedChat.name] ?? []).length > 0}
+									<span class="mx-1">·</span>
+									<span class="font-medium text-indigo-600 dark:text-indigo-400">
+										{typingLabel(selectedChat, xmppState.typing[selectedChat.name])}
+									</span>
+								{/if}
 							</p>
 						{/if}
 
@@ -2050,6 +2105,7 @@
 							oninput={() => {
 								updateMentionToken();
 								autosizeComposer();
+								noteTyping();
 							}}
 							onkeydown={composerKeydown}
 							onkeyup={updateMentionToken}
