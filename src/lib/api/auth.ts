@@ -1,17 +1,7 @@
 import { isAxiosError } from 'axios';
-import { PUBLIC_APP_ID, PUBLIC_APP_JWT } from '$env/static/public';
+import { PUBLIC_APP_ID } from '$env/static/public';
 import { api } from './client';
-import { appToken, appId } from '$lib/state/config.svelte';
-
-/** App-scoped Authorization header: selected app's appToken, else env JWT. */
-function appAuthHeader(): string {
-	return appToken() || PUBLIC_APP_JWT;
-}
-
-/** Body appId: selected app's id, else env default. */
-function currentAppId(): string {
-	return appId() || PUBLIC_APP_ID;
-}
+import { ensureAppConfig } from '$lib/state/config.svelte';
 
 export interface LoginUser {
 	_id: string;
@@ -33,10 +23,11 @@ export interface LoginResponse {
 }
 
 export async function loginWithEmail(email: string, password: string): Promise<LoginResponse> {
+	const config = await ensureAppConfig();
 	const { data } = await api.post<LoginResponse>(
 		'/v2/users/login-with-email',
-		{ email, password, appId: currentAppId() },
-		{ headers: { Authorization: appAuthHeader() } }
+		{ email, password, appId: config._id || PUBLIC_APP_ID },
+		{ headers: { Authorization: config.appToken } }
 	);
 	return data;
 }
@@ -52,10 +43,11 @@ export async function signUpWithEmail(input: {
 	lastName: string;
 	password: string;
 }): Promise<void> {
+	const config = await ensureAppConfig();
 	await api.post(
 		'/v2/users/sign-up-with-email/',
-		{ ...input, appId: currentAppId() },
-		{ headers: { Authorization: appAuthHeader() } }
+		{ ...input, appId: config._id || PUBLIC_APP_ID },
+		{ headers: { Authorization: config.appToken } }
 	);
 }
 

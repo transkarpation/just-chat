@@ -77,17 +77,14 @@ export async function addCustomDomain(domainName: string): Promise<void> {
 	}
 }
 
-/** Display name of the selected app (empty until loaded). */
-export function appDisplayName(): string {
-	return appConfig.config?.displayName ?? '';
-}
-
-/** App-scoped JWT of the selected app, used as the Authorization header. */
-export function appToken(): string {
-	return appConfig.config?.appToken ?? '';
-}
-
-/** Backend app id of the selected app. */
-export function appId(): string {
-	return appConfig.config?._id ?? '';
+/**
+ * Ensure the config for the selected domain is loaded, then return it. Used
+ * by login/sign-up, which need the app's appToken and appId. loadAppConfig
+ * throws if the request fails, so the returned config is always defined.
+ */
+export async function ensureAppConfig(): Promise<AppConfig> {
+	if (!appConfig.config) {
+		await loadAppConfig(appConfig.domainName);
+	}
+	return appConfig.config as AppConfig;
 }
