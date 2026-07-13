@@ -831,6 +831,12 @@
 		return `${bytes} B`;
 	}
 
+	// GIFs must use the original file, not locationPreview — the backend's
+	// preview is a static thumbnail, so the animation would not play
+	function imageSrc(media: MessageMedia): string {
+		return media.mimetype === 'image/gif' ? media.location : media.locationPreview;
+	}
+
 	// --- @-mention autocomplete in the composer ---
 	// what the user actually picked from the dropdown; at send time each text
 	// still present in the message becomes a mention reference
@@ -1657,7 +1663,7 @@
 													<!-- the image gets its height after the scroll-to-bottom ran;
 													     re-scroll when the newest one finishes loading -->
 													<img
-														src={images[0].locationPreview}
+														src={imageSrc(images[0])}
 														alt={images[0].originalName}
 														onload={newest ? () => scrollToBottom() : undefined}
 														class="max-h-80 w-full rounded-lg object-cover"
@@ -1681,7 +1687,7 @@
 															aria-label="View {media.originalName || 'image'} full size"
 														>
 															<img
-																src={media.locationPreview}
+																src={imageSrc(media)}
 																alt={media.originalName}
 																class="h-full w-full object-cover"
 															/>
