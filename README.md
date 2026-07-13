@@ -56,7 +56,8 @@ npm run dev
 | Variable | Purpose |
 | --- | --- |
 | `PUBLIC_API_BASE_URL` | Ethora REST API base, e.g. `https://api.chat.ethora.com` |
-| `PUBLIC_APP_ID` | Ethora application id (sent on login/registration) |
+| `PUBLIC_APP_DOMAIN_NAMES` | comma-separated app domain names to switch between, e.g. `app,justchatapp`; the first is the default. The app id and appToken (sent on login/registration) come from `get-config` for the selected domain |
+| `PUBLIC_APP_ENV` | set to `dev` to show a DEV badge |
 | `PUBLIC_XMPP_WS` | XMPP WebSocket endpoint, e.g. `wss://xmpp.chat.ethora.com/ws` |
 | `PUBLIC_XMPP_HOST` | XMPP domain, e.g. `xmpp.chat.ethora.com` |
 | `PUBLIC_XMPP_CONFERENCE` | MUC service domain, e.g. `conference.xmpp.chat.ethora.com` |

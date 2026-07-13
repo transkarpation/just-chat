@@ -1,4 +1,4 @@
-import { PUBLIC_APP_DOMAIN_NAMES, PUBLIC_APP_DOMAIN_NAME } from '$env/static/public';
+import { PUBLIC_APP_DOMAIN_NAMES } from '$env/static/public';
 import { api } from './client';
 
 export interface SystemChatAccount {
@@ -94,8 +94,8 @@ export const appDomainNames = PUBLIC_APP_DOMAIN_NAMES.split(',')
 	.map((name) => name.trim())
 	.filter(Boolean);
 
-/** Domain selected by default (falls back to the first configured one). */
-export const defaultDomainName = PUBLIC_APP_DOMAIN_NAME || appDomainNames[0] || '';
+/** Domain selected by default: the first configured one. */
+export const defaultDomainName = appDomainNames[0] || '';
 
 /** Fetch the app config for a domain (public, no auth required). */
 export async function getAppConfig(domainName: string): Promise<AppConfig> {

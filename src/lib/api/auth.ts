@@ -1,5 +1,4 @@
 import { isAxiosError } from 'axios';
-import { PUBLIC_APP_ID } from '$env/static/public';
 import { api } from './client';
 import { ensureAppConfig } from '$lib/state/config.svelte';
 
@@ -26,7 +25,7 @@ export async function loginWithEmail(email: string, password: string): Promise<L
 	const config = await ensureAppConfig();
 	const { data } = await api.post<LoginResponse>(
 		'/v2/users/login-with-email',
-		{ email, password, appId: config._id || PUBLIC_APP_ID },
+		{ email, password, appId: config._id },
 		{ headers: { Authorization: config.appToken } }
 	);
 	return data;
@@ -46,7 +45,7 @@ export async function signUpWithEmail(input: {
 	const config = await ensureAppConfig();
 	await api.post(
 		'/v2/users/sign-up-with-email/',
-		{ ...input, appId: config._id || PUBLIC_APP_ID },
+		{ ...input, appId: config._id },
 		{ headers: { Authorization: config.appToken } }
 	);
 }
