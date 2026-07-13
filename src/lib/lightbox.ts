@@ -54,14 +54,27 @@ export async function openImageGallery(images: GalleryImage[], index: number): P
 	const pswp = new PhotoSwipe({ dataSource, index });
 	pswp.init();
 
-	// measure the real sizes in the background; refresh each slide once its
-	// size is known so the provisional preview dimensions get replaced
-	dataSource.forEach((item, i) => {
-		if (dimensions.has(item.src)) return;
-		measure(item.src).then(({ w, h }) => {
+	// Preload the full-size files in the background (measuring also warms the
+	// browser cache) and refresh each slide once its real size is known.
+	// Nearest-first from the clicked slide, not archive order: a message with
+	// several attachments puts them on adjacent slides, so the ones the user
+	// is about to swipe to finish first and browsing has no pauses. Limited
+	// concurrency keeps the first neighbours from competing with the whole
+	// room's gallery for bandwidth.
+	const order = dataSource
+		.map((_, i) => i)
+		.filter((i) => !dimensions.has(dataSource[i].src))
+		.sort((a, b) => Math.abs(a - index) - Math.abs(b - index));
+	let cursor = 0;
+	async function pump(): Promise<void> {
+		while (cursor < order.length) {
+			const i = order[cursor++];
+			const item = dataSource[i];
+			const { w, h } = await measure(item.src);
 			item.width = w;
 			item.height = h;
 			if (!pswp.isDestroying) pswp.refreshSlideContent(i);
-		});
-	});
+		}
+	}
+	for (let k = 0; k < 3; k++) pump();
 }
