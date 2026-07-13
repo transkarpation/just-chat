@@ -41,6 +41,7 @@
 		"@xmpp/client": "^0.14.0",
 		"axios": "^1.18.1",
 		"bits-ui": "^2.18.1",
+		"firebase": "^12.16.0",
 		"photoswipe": "^5.4.4"
 	}
 }

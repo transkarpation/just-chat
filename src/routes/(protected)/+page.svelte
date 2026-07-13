@@ -13,6 +13,7 @@
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { chatsState, setChats, clearChats } from '$lib/state/chats.svelte';
 	import { appConfig } from '$lib/state/config.svelte';
+	import { logDeviceToken } from '$lib/push';
 	import { userLookupState, lookupUser, clearUserLookups } from '$lib/state/users.svelte';
 	import { xmppState } from '$lib/state/xmpp.svelte';
 	import {
@@ -148,6 +149,10 @@
 		myUserId = localStorage.getItem('userId') ?? myNickname.split('_')[1] ?? '';
 		userEmail = localStorage.getItem('userEmail') ?? '';
 		notifPermission = 'Notification' in window ? Notification.permission : 'unsupported';
+		if (notifPermission === 'granted') {
+			// fire-and-forget: prints the FCM device token to the console
+			logDeviceToken();
+		}
 		if (xmppUsername && xmppPassword && chatsState.items.length > 0) {
 			try {
 				const roomNames = chatsState.items.map((chat) => chat.name);
@@ -1038,6 +1043,9 @@
 		// the prompt must be triggered by a user gesture, otherwise
 		// browsers ignore it or auto-block the origin
 		notifPermission = await Notification.requestPermission();
+		if (notifPermission === 'granted') {
+			logDeviceToken();
+		}
 	}
 
 	function logout() {
