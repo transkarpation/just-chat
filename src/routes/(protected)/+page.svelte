@@ -7,6 +7,7 @@
 	import CreateChatDialog from '$lib/components/CreateChatDialog.svelte';
 	import ManageMembersDialog from '$lib/components/ManageMembersDialog.svelte';
 	import VoicePlayer from '$lib/components/VoicePlayer.svelte';
+	import ChatTypeIcon from '$lib/components/ChatTypeIcon.svelte';
 	import { getMyChats, deleteChat, type Chat, type ChatMember } from '$lib/api/chats';
 	import { uploadFile, type UploadedFile } from '$lib/api/files';
 	import { openImageGallery } from '$lib/lightbox';
@@ -1209,18 +1210,8 @@
 
 									<div class="min-w-0 flex-1">
 										<div class="flex items-center gap-1.5">
-											{#if chat.type === 'public'}
-												<span
-													class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
-													style="font-size: 18px"
-													title="Public chat">public</span
-												>
-											{:else if chat.type === 'group'}
-												<span
-													class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
-													style="font-size: 18px"
-													title="Group chat">group</span
-												>
+											{#if chat.type === 'public' || chat.type === 'group'}
+												<ChatTypeIcon type={chat.type} interactive={false} />
 											{/if}
 											<p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{chatTitle(chat)}</p>
 											{#if chat.createdBy && chat.createdBy === myUserId}
@@ -1329,18 +1320,8 @@
 					{/if}
 					<div class="relative min-w-0 flex-1">
 						<h3 class="flex items-center gap-1.5 font-semibold text-gray-900 dark:text-gray-100">
-							{#if selectedChat.type === 'public'}
-								<span
-									class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
-									style="font-size: 18px"
-									title="Public chat">public</span
-								>
-							{:else if selectedChat.type === 'group'}
-								<span
-									class="material-icons shrink-0 text-gray-400 dark:text-gray-500"
-									style="font-size: 18px"
-									title="Group chat">group</span
-								>
+							{#if selectedChat.type === 'public' || selectedChat.type === 'group'}
+								<ChatTypeIcon type={selectedChat.type} />
 							{/if}
 							<span class="truncate">{chatTitle(selectedChat)}</span>
 						</h3>
@@ -1517,18 +1498,6 @@
 						>
 							{linkCopied ? 'Copied!' : 'Copy link'}
 						</button>
-						{#if xmppState.joinedRooms.includes(selectedChat.name)}
-							<span
-								class="hidden rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 sm:inline dark:bg-green-950 dark:text-green-300"
-							>
-								joined
-							</span>
-						{/if}
-						<span
-							class="hidden rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600 sm:inline dark:bg-gray-800 dark:text-gray-300"
-						>
-							{selectedChat.type}
-						</span>
 					</div>
 				</div>
 
