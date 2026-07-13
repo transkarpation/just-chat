@@ -12,6 +12,7 @@
 	import { openImageGallery } from '$lib/lightbox';
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { chatsState, setChats, clearChats } from '$lib/state/chats.svelte';
+	import { appConfig } from '$lib/state/config.svelte';
 	import { userLookupState, lookupUser, clearUserLookups } from '$lib/state/users.svelte';
 	import { xmppState } from '$lib/state/xmpp.svelte';
 	import {
@@ -1052,7 +1053,7 @@
 <div class="flex h-dvh flex-col bg-gray-50 dark:bg-gray-950">
 	<header class="shrink-0 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
 		<div class="flex items-center justify-between px-4 py-3 sm:px-6">
-			<h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">User page</h1>
+			<h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{appConfig.config?.displayName || 'User page'}</h1>
 			<div class="flex items-center gap-4">
 				<span class="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400">
 					<span

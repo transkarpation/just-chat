@@ -1,11 +1,21 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import { PUBLIC_APP_ENV } from '$env/static/public';
+	import { appConfig, loadAppConfig } from '$lib/state/config.svelte';
 
 	let { children } = $props();
 
 	const isDev = PUBLIC_APP_ENV === 'dev';
+
+	onMount(async () => {
+		try {
+			await loadAppConfig(appConfig.domainName);
+		} catch {
+			// non-fatal: headers fall back to their static text
+		}
+	});
 </script>
 
 <svelte:head>

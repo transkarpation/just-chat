@@ -5,6 +5,8 @@
 	import { getMyChats } from '$lib/api/chats';
 	import { setChats } from '$lib/state/chats.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import AppSelector from '$lib/components/AppSelector.svelte';
+	import { appConfig } from '$lib/state/config.svelte';
 
 	let email = $state('');
 	let password = $state('');
@@ -41,11 +43,17 @@
 <!-- dvh, not vh: on mobile 100vh includes the collapsed URL bar and causes
      a needless scroll even when the content fits the visible viewport -->
 <div class="relative flex min-h-dvh items-center justify-center bg-gray-50 px-4 py-12 dark:bg-gray-950">
-	<div class="absolute top-4 right-4">
+	<div class="absolute top-4 right-4 flex items-center gap-3">
+		<AppSelector />
 		<ThemeToggle />
 	</div>
 	<div class="w-full max-w-md">
 		<div class="mb-8 text-center">
+			{#if appConfig.config?.displayName}
+				<p class="mb-2 text-sm font-semibold tracking-wide text-indigo-600 uppercase dark:text-indigo-400">
+					{appConfig.config.displayName}
+				</p>
+			{/if}
 			<h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Sign in to your account</h1>
 			<p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
 				Don't have an account?

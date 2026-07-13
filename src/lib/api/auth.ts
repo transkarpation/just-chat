@@ -1,6 +1,17 @@
 import { isAxiosError } from 'axios';
 import { PUBLIC_APP_ID, PUBLIC_APP_JWT } from '$env/static/public';
 import { api } from './client';
+import { appToken, appId } from '$lib/state/config.svelte';
+
+/** App-scoped Authorization header: selected app's appToken, else env JWT. */
+function appAuthHeader(): string {
+	return appToken() || PUBLIC_APP_JWT;
+}
+
+/** Body appId: selected app's id, else env default. */
+function currentAppId(): string {
+	return appId() || PUBLIC_APP_ID;
+}
 
 export interface LoginUser {
 	_id: string;
@@ -24,8 +35,8 @@ export interface LoginResponse {
 export async function loginWithEmail(email: string, password: string): Promise<LoginResponse> {
 	const { data } = await api.post<LoginResponse>(
 		'/v2/users/login-with-email',
-		{ email, password, appId: PUBLIC_APP_ID },
-		{ headers: { Authorization: PUBLIC_APP_JWT } }
+		{ email, password, appId: currentAppId() },
+		{ headers: { Authorization: appAuthHeader() } }
 	);
 	return data;
 }
@@ -43,8 +54,8 @@ export async function signUpWithEmail(input: {
 }): Promise<void> {
 	await api.post(
 		'/v2/users/sign-up-with-email/',
-		{ ...input, appId: PUBLIC_APP_ID },
-		{ headers: { Authorization: PUBLIC_APP_JWT } }
+		{ ...input, appId: currentAppId() },
+		{ headers: { Authorization: appAuthHeader() } }
 	);
 }
 
