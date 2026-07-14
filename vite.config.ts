@@ -1,9 +1,23 @@
+import { execSync } from 'node:child_process';
 import adapter from '@sveltejs/adapter-auto';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
+// commit the build was made from, logged to the console at startup;
+// resolved once when the build (or dev server) starts
+function commitHash(): string {
+	try {
+		return execSync('git rev-parse --short HEAD').toString().trim();
+	} catch {
+		return 'unknown'; // building outside a git checkout (e.g. a source tarball)
+	}
+}
+
 export default defineConfig({
+	define: {
+		__COMMIT_HASH__: JSON.stringify(commitHash())
+	},
 	plugins: [
 		tailwindcss(),
 		sveltekit({

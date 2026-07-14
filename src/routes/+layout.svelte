@@ -10,6 +10,7 @@
 	const isDev = PUBLIC_APP_ENV === 'dev';
 
 	onMount(async () => {
+		console.info(`[build] commit ${__COMMIT_HASH__}${isDev ? ' (dev)' : ''}`);
 		try {
 			await loadAppConfig(appConfig.domainName);
 		} catch {
