@@ -9,6 +9,7 @@
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { chatsState } from '$lib/state/chats.svelte';
 	import { xmppState } from '$lib/state/xmpp.svelte';
+	import Avatar from '$lib/components/Avatar.svelte';
 
 	let {
 		open = $bindable(false),
@@ -168,21 +169,13 @@
 				{#each chat.members.slice(0, membersShown) as member (member.xmppUsername)}
 					{@const mine = member.xmppUsername === myNickname}
 					<li class="flex items-center gap-2.5 px-3 py-2 text-sm">
-						{#if member.profileImage}
-							<img
-								src={member.profileImage}
-								alt=""
-								loading="lazy"
-								decoding="async"
-								class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
-							/>
-						{:else}
-							<div
-								class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-							>
-								{memberName(member).charAt(0).toUpperCase()}
-							</div>
-						{/if}
+						<Avatar
+							src={member.profileImage}
+							letter={memberName(member).charAt(0).toUpperCase()}
+							lazy
+							imgClass="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+							fallbackClass="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+						/>
 						<span class="min-w-0 flex-1 truncate text-gray-900 dark:text-gray-100">{memberName(member)}</span>
 						{#if member._id === chat.createdBy}
 							<span
@@ -251,21 +244,13 @@
 									toggleMember(member.xmppUsername, event.currentTarget.checked)}
 								class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-gray-600 dark:bg-gray-800"
 							/>
-							{#if member.profileImage}
-								<img
-									src={member.profileImage}
-									alt=""
-									loading="lazy"
-									decoding="async"
-									class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
-								/>
-							{:else}
-								<div
-									class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-								>
-									{memberName(member).charAt(0).toUpperCase()}
-								</div>
-							{/if}
+							<Avatar
+								src={member.profileImage}
+								letter={memberName(member).charAt(0).toUpperCase()}
+								lazy
+								imgClass="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+								fallbackClass="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+							/>
 							<span class="min-w-0 flex-1 truncate text-gray-900 dark:text-gray-100">{memberName(member)}</span>
 							{#if onlineNicknames.has(member.xmppUsername)}
 								<span class="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>

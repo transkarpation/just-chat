@@ -3,6 +3,7 @@
 	import { getApiErrorMessage } from '$lib/api/auth';
 	import { updateProfile } from '$lib/api/users';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import Avatar from '$lib/components/Avatar.svelte';
 
 	let firstName = $state('');
 	let lastName = $state('');
@@ -115,19 +116,12 @@
 	<main class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
 		<div class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-gray-800">
 			<div class="flex items-center gap-5">
-				{#if profileImage}
-					<img
-						src={profileImage}
-						alt="Profile"
-						class="h-24 w-24 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
-					/>
-				{:else}
-					<div
-						class="flex h-24 w-24 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-3xl font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
-					>
-						{(firstName || email).charAt(0).toUpperCase()}
-					</div>
-				{/if}
+				<Avatar
+					src={profileImage}
+					letter={(firstName || email).charAt(0).toUpperCase()}
+					imgClass="h-24 w-24 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+					fallbackClass="flex h-24 w-24 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-3xl font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
+				/>
 
 				<div class="min-w-0">
 					<p class="truncate text-lg font-semibold text-gray-900 dark:text-gray-100">
