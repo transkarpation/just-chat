@@ -34,6 +34,16 @@ let currentUser = '';
 let mamQueryCounter = 0;
 const handledInvites = new Set<string>();
 
+/**
+ * Whether the user can actually be looking at the app right now: the tab is
+ * visible AND its window has focus. `document.hidden` alone misses the
+ * two-browsers-side-by-side case — an unfocused window stays "visible", so
+ * messages were silently marked read and never notified about.
+ */
+function isViewingApp(): boolean {
+	return typeof document !== 'undefined' && !document.hidden && document.hasFocus();
+}
+
 const CHATSTATES_NS = 'http://jabber.org/protocol/chatstates';
 /** XEP-0085 chat states; only <composing/> means "typing", the rest stop it */
 const CHATSTATES = ['composing', 'paused', 'active', 'inactive', 'gone'];
@@ -368,17 +378,18 @@ export async function connectAndJoinRooms(
 			// archived messages have an id the receipt can reference
 			void sendDeliveryReceipt(room, message.id);
 			// the user is looking at this chat right now — it's read, too
-			if (openRoom === room && !document.hidden) {
+			// (an unfocused window doesn't count: refocusing marks it then)
+			if (openRoom === room && isViewingApp()) {
 				markRoomDisplayed(room);
 			}
 		}
 		// an audible ping for incoming messages (never for own sends): a loud
 		// chime when this user is mentioned; a quiet tick for other messages,
-		// but only when they can be missed — hidden tab or a different chat
+		// but only when they can be missed — unfocused app or a different chat
 		if (nick !== currentUser) {
 			if (mentions?.some((m) => m.xmppUsername === currentUser)) {
 				void playMentionSound();
-			} else if (document.hidden || openRoom !== room) {
+			} else if (!isViewingApp() || openRoom !== room) {
 				void playMessageSound();
 			}
 		}
@@ -432,14 +443,16 @@ async function joinRooms(roomNames: string[], nickname: string): Promise<void> {
 	}
 }
 
-/** Show a browser notification for a live message while the tab is hidden. */
+/** Show a browser notification for a live message while the user is not
+ * looking at the app — a hidden tab, a minimized window, or a visible
+ * window without focus (working in another browser next to it). */
 function notifyIfBackgrounded(
 	roomName: string,
 	nickname: string,
 	body: string,
 	mentions?: MessageMention[]
 ): void {
-	if (typeof document === 'undefined' || !document.hidden) return;
+	if (isViewingApp()) return;
 	if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
 	if (nickname === currentUser) return; // own message reflected back
 
@@ -796,11 +809,12 @@ async function sendDeliveryReceipt(roomName: string, archiveId: string): Promise
  * message from someone else (XEP-0333 displayed marker as a groupchat
  * stanza, archived via <store>). One watermark covers the whole backlog, so
  * opening a chat costs a single stanza. No-ops when there is nothing newer
- * than the already-sent watermark, when the tab is hidden, or when offline.
+ * than the already-sent watermark, when the app is not being looked at
+ * (hidden tab or unfocused window), or when offline.
  * Call it whenever the user is actually looking at the room's messages.
  */
 export function markRoomDisplayed(roomName: string): void {
-	if (typeof document === 'undefined' || document.hidden) return;
+	if (!isViewingApp()) return;
 	if (!xmpp || xmppState.status !== 'online') return;
 	const room = messagesState.rooms[roomName];
 	if (!room) return;

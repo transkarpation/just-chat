@@ -198,16 +198,22 @@
 		}
 	});
 
-	// returning to the tab means the open conversation is being read again —
-	// push the read watermark for messages that arrived while it was hidden
+	// returning to the app means the open conversation is being read again —
+	// push the read watermark for messages that arrived meanwhile. Two
+	// events cover the two ways of coming back: `visibilitychange` for a
+	// hidden tab / minimized window, `focus` for refocusing a window that
+	// stayed visible next to another one (no visibility change fires then).
+	// markRoomDisplayed itself no-ops unless the app is visible and focused.
 	onMount(() => {
-		const onVisible = () => {
-			if (!document.hidden && selectedRoom) {
-				markRoomDisplayed(selectedRoom);
-			}
+		const onBack = () => {
+			if (selectedRoom) markRoomDisplayed(selectedRoom);
 		};
-		document.addEventListener('visibilitychange', onVisible);
-		return () => document.removeEventListener('visibilitychange', onVisible);
+		document.addEventListener('visibilitychange', onBack);
+		window.addEventListener('focus', onBack);
+		return () => {
+			document.removeEventListener('visibilitychange', onBack);
+			window.removeEventListener('focus', onBack);
+		};
 	});
 
 	// jump to the newest message when one is appended to the open chat
