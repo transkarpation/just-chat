@@ -8,6 +8,7 @@
 	import ManageMembersDialog from '$lib/components/ManageMembersDialog.svelte';
 	import VoicePlayer from '$lib/components/VoicePlayer.svelte';
 	import ChatTypeIcon from '$lib/components/ChatTypeIcon.svelte';
+	import Avatar from '$lib/components/Avatar.svelte';
 	import { getMyChats, deleteChat, type Chat, type ChatMember } from '$lib/api/chats';
 	import { uploadFile, type UploadedFile } from '$lib/api/files';
 	import { openImageGallery } from '$lib/lightbox';
@@ -20,6 +21,7 @@
 	import {
 		messagesState,
 		lastMessage,
+		hasUnread,
 		clearMessages,
 		forgetRoom,
 		compareArchiveIds,
@@ -42,7 +44,8 @@
 		editRoomMessage,
 		setRoomReaction,
 		leaveRoom,
-		subscribeToRoom
+		subscribeToRoom,
+		persistChatReadTime
 	} from '$lib/xmpp/client';
 
 	let loading = $state(false);
@@ -266,6 +269,9 @@
 				...chatsState.items.map((chat) => chat.name),
 				roomName
 			]);
+			// membership starts now — pre-join history must not show as
+			// unread even if the user leaves before the room finishes opening
+			persistChatReadTime(roomName);
 			// the backend registers the membership asynchronously (~10s
 			// observed), so poll /chats/my until the room shows up there
 			const appeared = await waitForRoomInMyChats(roomName, 30_000);
@@ -1243,6 +1249,12 @@
 							{@const last = lastMessage(chat.name)}
 							{@const selected = selectedRoom === chat.name}
 							{@const typingNicks = xmppState.typing[chat.name] ?? []}
+							{@const unread = hasUnread(chat.name, myNickname)}
+							<!-- online dot for direct chats sits on the avatar, same as
+							     in the conversation header -->
+							{@const other = privateOther(chat)}
+							{@const online =
+								other && xmppState.occupants[chat.name]?.includes(other.xmppUsername)}
 							<li>
 								<button
 									type="button"
@@ -1251,19 +1263,20 @@
 										? 'bg-indigo-50 dark:bg-indigo-950'
 										: 'hover:bg-gray-50 dark:hover:bg-gray-800'}"
 								>
-									{#if chatAvatar(chat)}
-										<img
+									<div class="relative shrink-0">
+										<Avatar
 											src={chatAvatar(chat)}
-											alt=""
-											class="h-10 w-10 shrink-0 rounded-full object-cover"
+											letter={chatTitle(chat).charAt(0).toUpperCase()}
+											imgClass="h-10 w-10 rounded-full object-cover"
+											fallbackClass="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
 										/>
-									{:else}
-										<div
-											class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
-										>
-											{chatTitle(chat).charAt(0).toUpperCase()}
-										</div>
-									{/if}
+										{#if online}
+											<span
+												title="Online"
+												class="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-white bg-green-500 dark:border-gray-900"
+											></span>
+										{/if}
+									</div>
 
 									<div class="min-w-0 flex-1">
 										<div class="flex items-center gap-1.5">
@@ -1278,24 +1291,17 @@
 													yours
 												</span>
 											{/if}
-											<!-- green dot only for direct chats: the other person is
-											     online (present in the room's occupants) -->
-											{#if chat.type === 'private'}
-												{@const other = chat.members.find((m) => m.xmppUsername !== myNickname)}
-												{#if other && xmppState.occupants[chat.name]?.includes(other.xmppUsername)}
-													<span
-														class="h-2 w-2 shrink-0 rounded-full bg-green-500"
-														title="Online"
-													></span>
-												{/if}
-											{/if}
 										</div>
 										{#if typingNicks.length > 0}
 											<p class="truncate text-xs font-medium text-indigo-600 dark:text-indigo-400">
 												{typingLabel(chat, typingNicks)}
 											</p>
 										{:else if last}
-											<p class="truncate text-xs text-gray-500 dark:text-gray-400">
+											<p
+												class="truncate text-xs {unread
+													? 'font-medium text-gray-700 dark:text-gray-200'
+													: 'text-gray-500 dark:text-gray-400'}"
+											>
 												<span class="font-medium">{senderName(chat, last)}:</span>
 												{last.media
 												? `📎 ${
@@ -1311,6 +1317,12 @@
 											<p class="truncate text-xs text-gray-500 dark:text-gray-400">{chat.description}</p>
 										{/if}
 									</div>
+									{#if unread}
+										<span
+											class="h-2.5 w-2.5 shrink-0 rounded-full bg-indigo-500"
+											title="Unread messages"
+										></span>
+									{/if}
 								</button>
 							</li>
 						{/each}
@@ -1341,19 +1353,12 @@
 						{@const other = privateOther(selectedChat)}
 						{@const online = other && xmppState.occupants[selectedChat.name]?.includes(other.xmppUsername)}
 						<div class="relative shrink-0">
-							{#if other?.profileImage}
-								<img
-									src={other.profileImage}
-									alt=""
-									class="h-9 w-9 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
-								/>
-							{:else}
-								<span
-									class="flex h-9 w-9 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-								>
-									{chatTitle(selectedChat).charAt(0).toUpperCase()}
-								</span>
-							{/if}
+							<Avatar
+								src={other?.profileImage}
+								letter={chatTitle(selectedChat).charAt(0).toUpperCase()}
+								imgClass="h-9 w-9 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+								fallbackClass="flex h-9 w-9 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+							/>
 							{#if online}
 								<span
 									title="Online"
@@ -1364,19 +1369,12 @@
 					{:else}
 						<!-- group / public chat: the room avatar -->
 						<div class="shrink-0">
-							{#if chatAvatar(selectedChat)}
-								<img
-									src={chatAvatar(selectedChat)}
-									alt=""
-									class="h-9 w-9 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
-								/>
-							{:else}
-								<span
-									class="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
-								>
-									{chatTitle(selectedChat).charAt(0).toUpperCase()}
-								</span>
-							{/if}
+							<Avatar
+								src={chatAvatar(selectedChat)}
+								letter={chatTitle(selectedChat).charAt(0).toUpperCase()}
+								imgClass="h-9 w-9 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+								fallbackClass="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300"
+							/>
 						</div>
 					{/if}
 					<div class="relative min-w-0 flex-1">
@@ -1449,19 +1447,12 @@
 									{@const occupant = selectedChat.members.find((m) => m.xmppUsername === nickname)}
 									{@const name = nickToName(selectedChat, nickname)}
 									<div class="flex items-center gap-2.5 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200">
-										{#if occupant?.profileImage}
-											<img
-												src={occupant.profileImage}
-												alt=""
-												class="relative h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
-											/>
-										{:else}
-											<span
-												class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-											>
-												{name.charAt(0).toUpperCase()}
-											</span>
-										{/if}
+										<Avatar
+											src={occupant?.profileImage}
+											letter={name.charAt(0).toUpperCase()}
+											imgClass="relative h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
+											fallbackClass="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+										/>
 										<span class="min-w-0 flex-1 truncate">{name}</span>
 										<span class="h-2 w-2 shrink-0 rounded-full bg-green-500"></span>
 									</div>
@@ -1486,21 +1477,13 @@
 								{#each filteredMembers.slice(0, membersVisibleCount) as member (member.xmppUsername)}
 									{@const name = `${member.firstName} ${member.lastName}`.trim()}
 									<div class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200">
-										{#if member.profileImage}
-											<img
-												src={member.profileImage}
-												alt=""
-												loading="lazy"
-												decoding="async"
-												class="relative h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
-											/>
-										{:else}
-											<span
-												class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-											>
-												{name.charAt(0).toUpperCase()}
-											</span>
-										{/if}
+										<Avatar
+											src={member.profileImage}
+											letter={name.charAt(0).toUpperCase()}
+											lazy
+											imgClass="relative h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
+											fallbackClass="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+										/>
 										<span class="min-w-0 flex-1 truncate">
 											{member.xmppUsername === myNickname ? `${name} (you)` : name}
 										</span>
@@ -1667,19 +1650,12 @@
 									<!-- no per-message avatar in private chats: the opponent's
 									     avatar already sits in the chat header -->
 									{#if !mine && selectedChat.type !== 'private'}
-										{#if avatar}
-											<img
-												src={avatar}
-												alt=""
-												class="relative h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
-											/>
-										{:else}
-											<div
-												class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-											>
-												{senderName(selectedChat, message).charAt(0).toUpperCase()}
-											</div>
-										{/if}
+										<Avatar
+											src={avatar}
+											letter={senderName(selectedChat, message).charAt(0).toUpperCase()}
+											imgClass="relative h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-gray-200 transition-transform duration-150 ease-out hover:z-10 hover:scale-[1.8] dark:ring-gray-700"
+											fallbackClass="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+										/>
 									{/if}
 									<!-- min-w-0 lets this flex item shrink below the 400px media
 									     block's intrinsic width (flex items refuse to otherwise, which
@@ -1922,19 +1898,12 @@
 										? 'bg-indigo-50 dark:bg-indigo-950'
 										: ''}"
 								>
-									{#if member.profileImage}
-										<img
-											src={member.profileImage}
-											alt=""
-											class="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
-										/>
-									{:else}
-										<div
-											class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-										>
-											{`${member.firstName} ${member.lastName}`.trim().charAt(0).toUpperCase()}
-										</div>
-									{/if}
+									<Avatar
+										src={member.profileImage}
+										letter={`${member.firstName} ${member.lastName}`.trim().charAt(0).toUpperCase()}
+										imgClass="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-gray-200 dark:ring-gray-700"
+										fallbackClass="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+									/>
 									<span class="min-w-0 flex-1 truncate text-gray-900 dark:text-gray-100">
 										{`${member.firstName} ${member.lastName}`.trim()}
 									</span>

@@ -69,8 +69,19 @@ export interface RoomMessages {
 }
 
 export const messagesState = $state({
-	rooms: {} as Record<string, RoomMessages>
+	rooms: {} as Record<string, RoomMessages>,
+	/** per-room "the user last read this room at" (ms since epoch), synced
+	 * with the legacy jabber:iq:private chatjson store so read state carries
+	 * over between this app and legacy Ethora clients (both directions) */
+	readTimes: {} as Record<string, number>
 });
+
+/** Record a legacy last-read time for a room; older values never win. */
+export function setReadTime(roomName: string, readAt: number): void {
+	if ((messagesState.readTimes[roomName] ?? 0) < readAt) {
+		messagesState.readTimes[roomName] = readAt;
+	}
+}
 
 export function ensureRoom(roomName: string): RoomMessages {
 	if (!messagesState.rooms[roomName]) {
@@ -260,10 +271,35 @@ export function lastMessage(roomName: string): ChatMessage | undefined {
 	return messagesState.rooms[roomName]?.messages.at(-1);
 }
 
+/**
+ * Whether the room holds messages `nickname` hasn't read: the newest loaded
+ * foreign message is newer than that user's own read watermark (the inverse
+ * of the check markRoomDisplayed does before sending a marker). Loading the
+ * newest history page brings the archived watermark along, so this works
+ * right after a reload; if the watermark is older than the loaded page, it is
+ * simply absent — and the room correctly counts as unread. A yes/no signal
+ * only: one loaded message from the room is enough, no counting involved.
+ *
+ * The legacy read time is a second, cross-client "read" signal: legacy
+ * Ethora clients don't send displayed markers, they bump the chatjson store
+ * timestamp instead — a room read there must not show as unread here.
+ */
+export function hasUnread(roomName: string, nickname: string): boolean {
+	const room = messagesState.rooms[roomName];
+	if (!room) return false;
+	const newest = room.messages.findLast((m) => !m.pending && m.nickname !== nickname);
+	if (!newest) return false;
+	const own = room.displayedUpTo[nickname];
+	if (own && compareArchiveIds(newest.id, own) <= 0) return false;
+	const readAt = messagesState.readTimes[roomName];
+	return !readAt || Date.parse(newest.timestamp) > readAt;
+}
+
 export function forgetRoom(roomName: string): void {
 	delete messagesState.rooms[roomName];
 }
 
 export function clearMessages(): void {
 	messagesState.rooms = {};
+	messagesState.readTimes = {};
 }

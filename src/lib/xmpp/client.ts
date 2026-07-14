@@ -21,6 +21,7 @@ import {
 	replaceMessageBody,
 	applyReaction,
 	forgetRoom,
+	setReadTime,
 	type ChatMessage,
 	type MessageMedia,
 	type MessageMention
@@ -62,6 +63,116 @@ function clearTypingState(): void {
 	for (const timer of typingTimers.values()) clearTimeout(timer);
 	typingTimers.clear();
 	xmppState.typing = {};
+}
+
+const PRIVATE_STORAGE_NS = 'jabber:iq:private';
+const CHATJSON_NS = 'chatjson:store';
+
+/**
+ * In-memory mirror of the legacy Ethora "chat read times" blob kept in XMPP
+ * private storage (XEP-0049): full room JID → ms-epoch string of when the
+ * user last read that room. Legacy clients derive their unread badges from
+ * it. Private storage replaces the whole element on every write, so the
+ * mirror is fetched once per connection, updated locally, and written back
+ * in full — entries of rooms this app doesn't know about are preserved.
+ */
+let chatReadStore: Record<string, string> = {};
+let chatReadWriteTimer: ReturnType<typeof setTimeout> | null = null;
+// writes ride a promise chain so two debounce firings never interleave
+let chatReadWriteChain = Promise.resolve();
+// whether the store was fetched at least once this login — guards the
+// fresh-account seeding, since the mirror alone can't tell "never fetched"
+// from "fetched and empty" once a room join wrote an entry into it
+let chatReadTimesLoaded = false;
+
+async function loadChatReadTimes(): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') return;
+	let fetched: Record<string, string> = {};
+	try {
+		const result = await xmpp.iqCaller.request(
+			xml(
+				'iq',
+				{ type: 'get', id: `get-chats-private-req:${Date.now()}` },
+				xml('query', { xmlns: PRIVATE_STORAGE_NS }, xml('chatjson', { xmlns: CHATJSON_NS }))
+			),
+			15_000
+		);
+		const value = result
+			.getChild('query', PRIVATE_STORAGE_NS)
+			?.getChild('chatjson', CHATJSON_NS)?.attrs.value;
+		if (value) fetched = JSON.parse(String(value));
+	} catch (err) {
+		console.error('loading chat read times failed:', err);
+		return;
+	}
+	// an account with NO stored read times has never read anything in any
+	// Ethora client — a freshly registered user. Their default rooms come
+	// pre-filled with old messages that would all light up as unread; seed
+	// "read now" for every room instead, so only messages arriving after
+	// registration count. The seed write makes the store non-empty, so this
+	// runs once per account lifetime (the loaded flag keeps a reconnect
+	// whose fetch races a pending seed write from re-seeding).
+	if (Object.keys(fetched).length === 0 && !chatReadTimesLoaded) {
+		chatReadTimesLoaded = true;
+		for (const chat of chatsState.items) persistChatReadTime(chat.name);
+		return;
+	}
+	chatReadTimesLoaded = true;
+	// merge instead of replace: on a reconnect the mirror may hold reads of
+	// this session that never got written — the newer time wins per room
+	for (const [jid, ts] of Object.entries(fetched)) {
+		if (Number(ts) > Number(chatReadStore[jid] ?? 0)) {
+			chatReadStore[jid] = String(ts);
+		}
+	}
+	for (const [jid, ts] of Object.entries(chatReadStore)) {
+		const readAt = Number(ts);
+		const [room, host] = jid.split('@');
+		if (room && host === PUBLIC_XMPP_CONFERENCE && Number.isFinite(readAt)) {
+			setReadTime(room, readAt);
+		}
+	}
+}
+
+/**
+ * Record "the user read `roomName` just now" in the legacy private-storage
+ * blob, so legacy Ethora clients clear their unread badge for the room too.
+ * Also the seeding primitive: called at join time (invite / link) it makes
+ * the room's pre-join history count as read, so only messages arriving
+ * after the user became a member show as unread.
+ * Rapid calls (each live message in an open chat) update the mirror at once
+ * but coalesce into a single debounced write. Best-effort: a lost write only
+ * leaves a stale unread badge in legacy clients.
+ */
+export function persistChatReadTime(roomName: string): void {
+	const now = Date.now();
+	chatReadStore[`${roomName}@${PUBLIC_XMPP_CONFERENCE}`] = String(now);
+	setReadTime(roomName, now);
+	if (chatReadWriteTimer) clearTimeout(chatReadWriteTimer);
+	chatReadWriteTimer = setTimeout(() => {
+		chatReadWriteTimer = null;
+		chatReadWriteChain = chatReadWriteChain.then(writeChatReadStore);
+	}, 1_000);
+}
+
+async function writeChatReadStore(): Promise<void> {
+	if (!xmpp || xmppState.status !== 'online') return;
+	try {
+		await xmpp.iqCaller.request(
+			xml(
+				'iq',
+				{ type: 'set', id: `set-chats-private-req:${Date.now()}` },
+				xml(
+					'query',
+					{ xmlns: PRIVATE_STORAGE_NS },
+					xml('chatjson', { xmlns: CHATJSON_NS, value: JSON.stringify(chatReadStore) })
+				)
+			),
+			15_000
+		);
+	} catch (err) {
+		console.error('storing chat read times failed:', err);
+	}
 }
 
 /**
@@ -299,6 +410,9 @@ export async function connectAndJoinRooms(
 		clearTypingState();
 		await xmpp!.send(xml('presence')); // initial presence
 		await joinRooms(roomNames, username);
+		// legacy read times feed the sidebar unread dots — best-effort, the
+		// dots just rely on the displayed markers alone until this lands
+		void loadChatReadTimes();
 	});
 
 	await xmpp.start();
@@ -636,6 +750,9 @@ async function acceptRoomInvite(roomName: string): Promise<void> {
 	try {
 		await subscribeToRoom(roomName, currentUser);
 		await joinRooms([roomName], currentUser);
+		// membership starts NOW — the room's earlier history is not "unread
+		// for me"; only messages written after this moment light the dot
+		persistChatReadTime(roomName);
 		for (let attempt = 0; attempt < 15; attempt++) {
 			const chats = await getMyChats();
 			setChats(chats.items);
@@ -693,6 +810,7 @@ export function markRoomDisplayed(roomName: string): void {
 	const own = room.displayedUpTo[currentUser];
 	if (own && compareArchiveIds(newest.id, own) <= 0) return; // already marked
 	applyDisplayedMarker(roomName, currentUser, newest.id);
+	persistChatReadTime(roomName); // keep legacy clients' unread badges in sync
 	void (async () => {
 		try {
 			await xmpp!.send(
@@ -973,4 +1091,10 @@ export async function disconnectXmpp(): Promise<void> {
 	xmppState.joinedRooms = [];
 	xmppState.occupants = {};
 	clearTypingState();
+	if (chatReadWriteTimer) {
+		clearTimeout(chatReadWriteTimer);
+		chatReadWriteTimer = null;
+	}
+	chatReadStore = {};
+	chatReadTimesLoaded = false;
 }
